@@ -115,7 +115,7 @@ def process_nearest_date(catalog, sorted_collections, time_of_interest_date, bbo
 
         # Stacked VV during flood
         vv_during_stack = np.stack(resized_array_list)
-        print(vv_during_stack, "vv during flood stacked")
+        # print(vv_during_stack, "vv during flood stacked")
 
         # Find the smallest shape in the list
         smallest_shape_vh_during = min([arr.shape for arr in vh_during])
@@ -123,5 +123,5 @@ def process_nearest_date(catalog, sorted_collections, time_of_interest_date, bbo
 
         # Stacked Vh during flood
         vh_during_stack = np.stack(resized_array_list)
-        print(vh_during_stack, "vh during flood stacked")
+        # print(vh_during_stack, "vh during flood stacked")
         return vh_during_stack, vv_during_stack, data_array
