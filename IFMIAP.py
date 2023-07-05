@@ -1,6 +1,6 @@
 import numpy as np
 import datetime
-from ifmiap.authenticate import authenticate
+from ifmiap.authenticate import sign_in
 from ifmiap.preprocessing import preprocess, process_nearest_date
 from ifmiap.postprocessing import postprocess
 from ifmiap.mapfloods import map_floods
@@ -17,7 +17,7 @@ time_of_interest_time = datetime.time(10, 50, 0)  # 10:50 AM
 # Combine the target date and time
 time_of_interest_datetime = datetime.datetime.combine(time_of_interest_date, time_of_interest_time)
 # Authenticate and get the STAC catalog
-catalog = authenticate()
+catalog = sign_in()
 
 
 def run_script():
