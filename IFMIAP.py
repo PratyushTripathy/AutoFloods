@@ -1,46 +1,24 @@
-import numpy as np
 import datetime
-from ifmiap.authenticate import sign_in
-from ifmiap.preprocessing import preprocess, process_nearest_date
-from ifmiap.postprocessing import postprocess
-from ifmiap.mapfloods import map_floods
-import sys
 import warnings
+import time
+import sys
+import os
 from rasterio.errors import NotGeoreferencedWarning
+
+from ifmiap.authenticate import sign_in
+from ifmiap.utils import search_sentinel_data, filter_items_floodPeriod, grid_bounds, filter_items_dryPeriod
+from ifmiap.preprocessing import process_raster_data, process_shapefile_data, get_grid_data_dry_period
+from ifmiap.postprocessing import process_vv_stacked_images, process_vh_stacked_images
+from ifmiap.mapfloods import map_floods
 
 # Ignore the NotGeoreferencedWarning
 warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
-nearest_dates = []
-# Date of interest for the flood map
-time_of_interest_date = datetime.date(2022, 7, 1)
-time_of_interest_time = datetime.time(10, 50, 0)  # 10:50 AM
-# Combine the target date and time
-time_of_interest_datetime = datetime.datetime.combine(time_of_interest_date, time_of_interest_time)
 # Authenticate and get the STAC catalog
 catalog = sign_in()
 
 
-def run_script():
-    """
-        This function executes the main processing steps for generating flood maps.
-
-        It follows the following steps:
-        1. Define the bounding box and date range.
-        2. Preprocess the data by sorting collections and obtaining relevant data for the time of interest.
-        3. Process the nearest date to the time of interest and retrieve necessary data arrays.
-        4. Check if the data arrays are valid. If not, skip the rest of the code and move to the next iteration.
-        5. Load preprocessed data arrays for the dry period.
-        6. Calculate mean and standard deviation of VV and VH data for the dry period.
-        7. Perform postprocessing using the VV and VH data during the time of interest and the calculated statistics.
-        8. Generate a flood map using the postprocessed data.
-        9. Repeat the above steps for subsequent target dates until the script is stopped.
-
-        Note: The function assumes the availability of specific files and functions used in the processing steps.
-
-        Returns:
-            None
-        """
-    # Define the bounding box and date range
+def run_script(time_of_interest_date, stacked_images_before_vv, stacked_images_before_vh):
+    # Define the area of interest as a polygon for the STAC API search
     bbox_of_interest = {
         "type": "Polygon",
         "coordinates": [
@@ -53,64 +31,92 @@ def run_script():
             ]
         ],
     }
-
-    # Start and end date period
-    start_date = time_of_interest_date - datetime.timedelta(days=7)
+    # Calculate the start_date and end_date for data retrieval
+    start_date = time_of_interest_date - datetime.timedelta(days=0)
     end_date = time_of_interest_date + datetime.timedelta(days=7)
+    # Call the STAC API to search for satellite imagery meeting the specified criteria
+    results = search_sentinel_data(catalog, bbox_of_interest, start_date=start_date, end_date=end_date,
+                                   time_of_interest_date=time_of_interest_date)
 
-    # Preprocess the data
-    sorted_collections, df_before = preprocess(catalog, bbox_of_interest, start_date, end_date, time_of_interest_date)
-    # Finding Nearest date
-    vh_during_stack, vv_during_stack, data_array = process_nearest_date(catalog, sorted_collections,
-                                                                        time_of_interest_date,
-                                                                        bbox_of_interest)
-    if vh_during_stack is None or vv_during_stack is None or data_array is None:
-        return  # Skip the rest of the code and move to the next iteration
-    # Load Dry period VV and VH Numpy array file
-    vv_before_stack = np.load('ifmiap/postprocessing/Dry_period/vv_before_stack.npy')
-    vh_before_stack = np.load('ifmiap/postprocessing/Dry_period/vh_before_stack.npy')
-    # Calculate mean and standard deviation of VV and VH data for the dry period
-    vv_mean = np.mean(vv_before_stack, axis=0)
-    vv_std = np.std(vv_before_stack, axis=0)
+    # print(f"Returned {len(results)} Images")
+    # Filter the retrieved data based on criteria for flood period items
+    filtered_results, intersecting_ids, intersecting_geometries = filter_items_floodPeriod(results)
+    # print(f"Returned {len(filtered_results)} filtered_items")
+    # Process the raster data for VV and VH bands during the flood period
+    stacked_images_during_vv, stacked_images_during_vh = process_raster_data(filtered_results, intersecting_ids,
+                                                                             intersecting_geometries)
 
-    vh_mean = np.mean(vh_before_stack, axis=0)
-    vh_std = np.std(vh_before_stack, axis=0)
+    # POSTPROCESS
+    # Initialize lists to store VV flood extent data
+    vv_flood_extent = []
+    image_ids = []
+    grid_ids = []
+    geometry_ids = []
+    # Call the function to process stacked images for VV band
+    vv_flood_extent, image_ids, grid_ids, geometry_ids = process_vv_stacked_images(
+        stacked_images_during_vv, stacked_images_before_vv, vv_flood_extent, image_ids, grid_ids, geometry_ids
+    )
+    # Initialize lists to store VH flood extent data
+    vh_flood_extent = []
+    image_ids_vh = []
+    grid_ids_vh = []
+    geometry_ids_vh = []
+    # Call the function to process stacked images for VH band
+    vh_flood_extent, image_ids_vh, grid_ids_vh, geometry_ids_vh = process_vh_stacked_images(
+        stacked_images_during_vh, stacked_images_before_vh, vh_flood_extent, image_ids_vh, grid_ids_vh, geometry_ids_vh
+    )
+    # Map the flood extents for both VV and VH bands
+    map_floods(vv_flood_extent, vh_flood_extent, image_ids, grid_ids, geometry_ids)
 
-    # Perform postprocessing using VV and VH data during the time of interest and the calculated statistics
-    vv_flood_extent, vh_flood_extent = postprocess(vv_during_stack, vh_during_stack, vv_mean, vv_std, vh_mean,
-                                                   vh_std)
 
-    # Generate flood map
-    nearest_date = time_of_interest_date.strftime("%Y-%m-%d")
-    map_floods(vv_flood_extent, vh_flood_extent, vv_during_stack, nearest_date, data_array)
 
-# The code below continuously executes the script until a target date is reached
-while True:
-    # Get the current date and time
-    current_datetime = datetime.datetime.now()
 
-    # Check if it's the target date and time to run the script
-    if current_datetime >= time_of_interest_datetime:
-        if time_of_interest_date >= datetime.date(2022, 8, 1):
-            # Increment the target date by 12 days
-            # time_of_interest_date += datetime.timedelta(days=12)
-            # print(time_of_interest_date,"target")
+if __name__ == '__main__':
+    nearest_dates = []
+    # Date of interest for the flood map
+    time_of_interest_date = datetime.date(2023, 7, 1)
+    time_of_interest_time = datetime.time(18, 0, 0)  # 10:50 AM
+    # Combine the target date and time
+    time_of_interest_datetime = datetime.datetime.combine(time_of_interest_date, time_of_interest_time)
+    n = 1
+    # Call process_shapefile_data function to obtain stacked_images_before_vv and stacked_images_before_vh
+    filtered_grid_data_results = get_grid_data_dry_period(catalog, n)
+    stacked_images_before_vv, stacked_images_before_vh = process_shapefile_data(filtered_grid_data_results)
+    # Start the continuous execution until the target date
+    while True:
+        # Get the current date and time
+        current_datetime = datetime.datetime.now()
+        if time_of_interest_date >= datetime.date(2023, 7, 10):
+            time_of_interest_date += datetime.timedelta(days=11)
+        if time_of_interest_datetime >= current_datetime:
+            # Calculate the time difference until the next day
+            next_day = current_datetime + datetime.timedelta(days=1)
+            time_difference = datetime.datetime.combine(next_day.date(), time_of_interest_time) - current_datetime
+            # Check if time_difference is positive (not in the past)
+            if time_difference.total_seconds() > 0:
+                while time_difference.total_seconds() > 0:
+                    time_left = str(time_difference).split(".")[0]  # Extract the time portion
+                    sys.stdout.write(f"\rProgram is sleeping. Time left until waking up: {time_left}")
+                    sys.stdout.flush()
+                    time.sleep(1)  # Update the time every 1 second
+                    time_difference = datetime.datetime.combine(next_day.date(),
+                                                                time_of_interest_time) - datetime.datetime.now()
 
-            # # Combine the updated target date and time
-            # time_of_interest_datetime = datetime.datetime.combine(time_of_interest_date, time_of_interest_time)
-            sys.exit("Script stopped as the target date has been reached.")
+                # Clear the line
+                os.system('cls' if os.name == 'nt' else 'clear')
+
+                print("Waking up!")
+                continue
         # Execute the main script
-        run_script()
+        run_script(time_of_interest_date, stacked_images_before_vv, stacked_images_before_vh)
 
         # Increment the target date by one day
         time_of_interest_date += datetime.timedelta(days=1)
-        print(time_of_interest_date, "target")
 
         # Combine the updated target date and time
         time_of_interest_datetime = datetime.datetime.combine(time_of_interest_date, time_of_interest_time)
     # Calculate the time difference until the next day
     next_day = current_datetime + datetime.timedelta(days=1)
     time_difference = datetime.datetime.combine(next_day.date(), time_of_interest_time) - current_datetime
-
-#     # # Sleep until the next day
-#     # time.sleep(time_difference.total_seconds())
+    # Sleep until the next day
+    # time.sleep(time_difference.total_seconds())
