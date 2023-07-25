@@ -1,15 +1,13 @@
 # ifmiap/mapfloods/__init__.py
 
 import os
-
-
-
 import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
+import xarray as xr
 
 
-def map_floods(vv_flood_extent, vh_flood_extent, vv_during_stack, nearest_date,data_array):
+def map_floods(vv_flood_extent, vh_flood_extent, image_ids, grid_ids, geometry_ids):
     """
         Generates a flood map based on the flood extent arrays for VV and VH data.
 
@@ -24,13 +22,11 @@ def map_floods(vv_flood_extent, vh_flood_extent, vv_during_stack, nearest_date,d
             None
 
         """
-    for i, j in zip(vv_flood_extent, vh_flood_extent):
+    # Loop through vv_flood_extent and vh_flood_extent lists
+    for i, j, image_id, grid_id, geometry_id in zip(vv_flood_extent, vh_flood_extent, image_ids, grid_ids,
+                                                    geometry_ids):
         combined_flood_extent = i.astype(np.uint8) + j.astype(np.uint8)
-        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
-        ax.set_title(f'Flood Map (Dry Period - 01 February to 15 May 2020) (Wet Date - {nearest_date})')
-        ax.set_axis_off()
-        ax.imshow(np.flip(combined_flood_extent, axis=1))
-        # plt.show()
+
         total_pixels = combined_flood_extent.size
         flood_pixels = (combined_flood_extent == 1).sum()
         flood_percentage = (flood_pixels / total_pixels) * 100
@@ -39,17 +35,16 @@ def map_floods(vv_flood_extent, vh_flood_extent, vv_during_stack, nearest_date,d
         # Print the classification result
         if is_flood:
             print("The image represents a flood scene.")
-            export_flood_map(vv_during_stack, combined_flood_extent, data_array)
+            export_flood_map(combined_flood_extent, image_id, grid_id, geometry_id)
         else:
             print("The image does not represent a flood scene.")
 
 
-def export_flood_map(vv_during_stack, combined_flood_extent, data_array):
+def export_flood_map(combined_flood_extent, image_id, grid_id, geometry_id):
     """
         Exports the flood map as a GeoTIFF file.
 
         Args:
-            vv_during_stack (ndarray): Stack of VV data during the flood period.
             combined_flood_extent (ndarray): Combined flood extent array.
             data_array: The data array associated with the flood extent arrays.
 
@@ -57,23 +52,24 @@ def export_flood_map(vv_during_stack, combined_flood_extent, data_array):
             None
 
         """
-    for i, np_array in enumerate(vv_during_stack):
-        attribute_value = data_array[i].attrs["Image_ID"]
+    image_id = image_id
+    grid_id = grid_id
+    with rasterio.Env():
+        # Create a xarray DataArray from the combined flood extent array
+        data = xr.DataArray(combined_flood_extent)
+        xmin, ymin, xmax, ymax = geometry_id.bounds
+        # Define the metadata for the output file
+        profile = {
+            'driver': 'GTiff',
+            'dtype': rasterio.float32,
+            'nodata': None,
+            'width': data.shape[1],
+            'height': data.shape[0],
+            'count': 1,
+            'transform': rasterio.transform.from_bounds(xmin, ymin, xmax, ymax, data.shape[1], data.shape[0])
+        }
 
-        with rasterio.Env():
-            data = combined_flood_extent
-
-            # Define the metadata for the output file
-            profile = {
-                'driver': 'GTiff',
-                'dtype': rasterio.float32,
-                'nodata': None,
-                'width': data.shape[1],
-                'height': data.shape[0],
-                'count': 1,
-            }
-
-            with rasterio.open(
-                    "ifmiap/mapfloods/Flood_images_output/" + attribute_value + ".tif",
-                    'w', **profile) as dst:
-                dst.write(data, 1)
+        with rasterio.open(
+                "Flood_images_output/" + image_id + "_" + str(grid_id) + ".tif",
+                'w', **profile) as dst:
+            dst.write(data, 1)
