@@ -1,9 +1,21 @@
-# ifmiap/authenticate/__init__.py
+ # ifmiap/authenticate/__init__.py
 
 import os
 
-file_path = os.path.realpath(__file__)
-print(file_path)
+import pystac_client
+import planetary_computer
 
-def my_func(n):
-    return n ** 3
+def sign_in():
+    """
+        Authenticates the user and returns a catalog object for accessing STAC data.
+
+        Returns:
+            catalog (pystac_client.Client): A catalog object providing access to STAC data.
+
+    """
+    catalog = pystac_client.Client.open(
+        "https://planetarycomputer.microsoft.com/api/stac/v1",
+        modifier=planetary_computer.sign_inplace,
+    )
+
+    return catalog
