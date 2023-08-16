@@ -1,20 +1,156 @@
 # ifmiap/utils/__init__.py
 
+# import required libraries
+from datetime import datetime
+import pandas as pd
+import geopandas as gpd
+from ..authenticate import sign_in
+import rasterio
+import numpy as np
+
+# DEFINE constants
+INDIA_GRID_SHAPEFILE_PATH = r'resources/india_fishnet_4326.shp'
+CATALOG = sign_in()
+
+
+# this function creates python datetime objects using a given date and number of days to advance
+def date_range(start, days):
+    temp_date = pd.date_range(datetime.strptime(start, '%d/%m/%Y'), periods=days+1, freq='D')
+
+    return (temp_date.min().date(), temp_date.max().date())
+
+
+# define a function to get bounding box as json from a shapefile using GeoPandas
+def gpd_to_json(id_list, infile=INDIA_GRID_SHAPEFILE_PATH):
+    # read the shapefile
+    gdf = gpd.read_file(infile)
+    
+    # filter using the given ID list
+    gdf = gdf.loc[gdf['ID'].isin(id_list)]
+    
+    # extract bounding box of each of the filtered polygons
+    gdf_bbox = [
+        row.geometry.bounds
+        for idx, row in gdf.iterrows()
+               ]
+    
+    # create GeoJSON using the bounds
+    def get_bbox(bbox):
+        lon_min, lat_min, lon_max, lat_max = bbox
+        
+        return [
+            [lon_min, lat_min],
+            [lon_max, lat_min],
+            [lon_max, lat_max],
+            [lon_min, lat_max],
+            [lon_min, lat_min]
+        ]
+    
+    return [{
+        "type": "Polygon",
+        "coordinates": [
+            get_bbox(bounds_item)
+        ],
+    }
+    for bounds_item in gdf_bbox
+    ]
+
+# define a function to search for Sentinel-1 data
+def search_sentinel_data(bbox, start_date=None, end_date=None):
+    """
+    Search for Sentinel-1 data within a specified time range and bounding box of interest.
+
+    Parameters:
+    -----------
+    bbox              : Dictionary
+                        The bounding box of interest in GeoJSON format, specified as a dictionary.
+                        
+    start_date        : Datetime object
+                        The start date of the time range to search for data.
+                        
+    end_date          : Datetime object
+                        The end date of the time range to search for data.
+
+    Returns:
+    --------
+    results           : list
+                        A list of pystac.Item objects containing the searched Sentinel-1 data.
+
+    """
+    all_results = []
+
+    # Define the date range using start and end datetime objects
+    date_range = f'{start_date.strftime("%Y-%m-%dT00:00:00Z")}/{end_date.strftime("%Y-%m-%dT23:59:59Z")}'
+
+    # search for Sentinel-1 scenes
+    results = CATALOG.search(
+        collections = ["sentinel-1-grd"],
+        intersects = bbox,
+        datetime = date_range
+    )
+    
+    # select scenes that have VV and VH bands in them
+    for item in results.get_items():
+        if ('vh' in item.assets) and ('vv' in item.assets):
+            all_results.append(item)
+
+    return all_results
+
+# define a function to export xarray.DataArray object to TIFF file
+def export_xarray(xarray_data, filename):
+    with rasterio.Env():
+        xmin, ymin, xmax, ymax = [
+            xarray_data.x.min().values,
+            xarray_data.y.min().values,
+            xarray_data.x.max().values,
+            xarray_data.y.max().values
+        ]
+
+        if len(xarray_data.dims) == 3:
+            bands, rows, cols = xarray_data.shape
+        elif len(xarray_data.dims) == 2:
+            rows, cols = xarray_data.shape
+        else:
+            print('Number of dimensions in input data exceed three. Please check.')
+
+        # Define the metadata for the output file
+        profile = {
+            'driver': 'GTiff',
+            'dtype': rasterio.float32,
+            'nodata': np.nan,
+            'width': cols,
+            'height': rows,
+            'count': xarray_data.shape[0],
+            'transform': rasterio.transform.from_bounds(xmin, ymin, xmax, ymax, cols, rows)
+        }
+
+        with rasterio.open(
+                filename,
+                'w', **profile) as dst:
+            for band in range(xarray_data.shape[0]):
+                dst.write(xarray_data.data[band, :, :], band+1)
+
+###################################################################
+
+
 from shapely.geometry import box
 import geopandas as gpd
-
-shapefile_path = "inputs/Grid_shapefile/shp_4326.shp"
+shapefile_path = "resources/Grid_shapefile/shp_4326.shp"
 
 
 def load_grid_shapefile(shapefile_path):
     """
-        Load a grid shapefile as a GeoDataFrame.
+    Load a grid shapefile as a GeoDataFrame.
 
-        Parameters:
-            shapefile_path (str): The file path to the grid shapefile.
+    Parameters:
+    -----------
+    shapefile_path    : string
+                        The file path to the grid shapefile.
 
-        Returns:
-            gpd.GeoDataFrame: A GeoDataFrame representing the grid polygons loaded from the shapefile.
+    Returns:
+    --------
+    GeoDataFrame      : GeoPandas.GeoDataFrame
+                        A GeoDataFrame representing the grid polygons loaded from the shapefile.
     """
     # Load the grid shapefile using GeoPandas' read_file function
     grid_gdf = gpd.read_file(shapefile_path)
@@ -22,84 +158,6 @@ def load_grid_shapefile(shapefile_path):
     return grid_gdf
 
 
-# def search_sentinel_data(catalog, date_ranges, bbox_of_interest):
-#     all_results = []
-#     for date_range in date_ranges:
-#         # Search for Sentinel-1 data
-#         results = catalog.search(
-#             collections=["sentinel-1-grd"],
-#             intersects=bbox_of_interest,
-#             datetime=date_range,
-#         )
-#         for item in results.get_items():
-#             if 'vh' in item.assets:
-#                 all_results.append(item)
-#     return all_results
-
-
-
-def search_sentinel_data(catalog, bbox_of_interest, date_ranges=None, start_date=None, end_date=None, time_of_interest_date=None):
-    """
-       Search for Sentinel-1 data within a specified time range and bounding box of interest.
-
-       Parameters:
-           catalog (pystac.Catalog): The pystac Catalog object representing the STAC catalog to search.
-           bbox_of_interest (dict): The bounding box of interest in GeoJSON format, specified as a dictionary.
-           date_ranges (list, optional): A list of date ranges in ISO 8601 format (start_date/end_date) to search for data.
-                                         If provided, this parameter takes precedence over start_date and end_date.
-           start_date (datetime.date, optional): The start date of the time range to search for data.
-           end_date (datetime.date, optional): The end date of the time range to search for data.
-           time_of_interest_date (datetime.date, optional): The date of interest (a single date) to search for data.
-
-       Returns:
-           list: A list of pystac.Item objects containing the searched Sentinel-1 data.
-
-       Raises:
-           ValueError: If both date_ranges and start_date/end_date are None or if both are provided simultaneously.
-    """
-    all_results = []
-
-    if date_ranges is not None:
-        # If date_ranges is provided, use it to perform the search
-        for date_range in date_ranges:
-            # Search for Sentinel-1 data
-            results = catalog.search(
-                collections=["sentinel-1-grd"],
-                intersects=bbox_of_interest,
-                datetime=date_range,
-            )
-            for item in results.get_items():
-                if 'vh' in item.assets:
-                    all_results.append(item)
-    else:
-        if start_date is not None and end_date is not None:
-            # If date_ranges is not provided, construct the date range using start_date and end_date
-            # Convert start_date and end_date to ISO 8601 format
-            start_date_str = start_date.strftime("%Y-%m-%dT00:00:00Z")
-            end_date_str = end_date.strftime("%Y-%m-%dT23:59:59Z")
-
-            # If time_of_interest_date is not None, construct the list of date ranges
-            date_ranges = []
-            if time_of_interest_date is not None:
-                date_ranges.append(f"{start_date_str}/{end_date_str}")
-            else:
-                # Search for the single date
-                date_ranges.append(start_date_str)
-
-            for date_range in date_ranges:
-                # Search for Sentinel-1 data
-                results = catalog.search(
-                    collections=["sentinel-1-grd"],
-                    intersects=bbox_of_interest,
-                    datetime=date_range,
-                )
-                for item in results.get_items():
-                    if 'vh' in item.assets:
-                        all_results.append(item)
-        else:
-            raise ValueError("Invalid input: either date_ranges or start_date and end_date should be provided.")
-
-    return all_results
 
 def filter_items_dryPeriod(all_results):
     """

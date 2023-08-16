@@ -1,4 +1,57 @@
 # ifmiap/preprocessing/__init__.py
+
+# import required libraries
+import rioxarray
+import geopandas as gpd
+from ..utils import INDIA_GRID_SHAPEFILE_PATH
+import xarray as xr
+
+# define a function to read and reproject VV and VH tif files from the cloud
+def read_reproj_clip(stac_item, id_list):
+    # get the URL to the VV and VH bands
+    vv_href = stac_item.assets["vv"].href
+    vh_href = stac_item.assets["vh"].href
+
+    # read the VV and VH bands
+    vv_ds = rioxarray.open_rasterio(vv_href, overview_level=3, masked=True)
+    vh_ds = rioxarray.open_rasterio(vh_href, overview_level=3, masked=True)
+
+    # reproject the VV and VH bands
+    vv_ds = vv_ds.rio.reproject("EPSG:4326")
+    vh_ds = vh_ds.rio.reproject("EPSG:4326")
+
+    # read the shapefile and filter it to use for clipping
+    gdf = gpd.read_file(INDIA_GRID_SHAPEFILE_PATH)
+    gdf = gdf.loc[gdf['ID'].isin(id_list)]
+
+    # clip VV and VH bands for the given grid
+    vv_ds = vv_ds.rio.clip(gdf.geometry)
+    vh_ds = vh_ds.rio.clip(gdf.geometry)
+
+    return {
+        'vv_ds': vv_ds,
+        'vh_ds': vh_ds
+    }
+
+# define a function to stack all the images for a given tile
+def stack_images(stac_list, id_list):
+    # call the previous function
+    stacked_images = [
+        read_reproj_clip(stac_item, id_list)
+        for stac_item in stac_list
+    ]
+
+    # stack the data properly
+    vv_stack = xr.concat([item['vv_ds'] for item in stacked_images], dim="band")
+    vh_stack = xr.concat([item['vh_ds'] for item in stacked_images], dim="band")
+
+    return {
+        'vv_stack': vv_stack,
+        'vh_stack': vh_stack
+    }
+
+###############################################################
+
 import numpy as np
 from rioxarray.exceptions import NoDataInBounds
 from rasterio.errors import RasterioIOError
@@ -39,6 +92,7 @@ def get_grid_data_dry_period(catalog, n):
     filtered_grid_data_results = filter_items_dryPeriod(grid_data_results)
     # Return the filtered grid data for dry periods
     return filtered_grid_data_results
+
 def reproject_and_resample(vv_clipped, vh_clipped, target_resolution):
     """
        Reproject and resample the clipped raster data to the target resolution.
