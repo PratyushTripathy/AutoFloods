@@ -7,6 +7,7 @@ import geopandas as gpd
 from ..authenticate import sign_in
 import rasterio
 import numpy as np
+from shapely.geometry import Polygon
 
 # DEFINE constants
 INDIA_GRID_SHAPEFILE_PATH = r'resources/india_fishnet_4326.shp'
@@ -21,7 +22,7 @@ def date_range(start, days):
 
 
 # define a function to get bounding box as json from a shapefile using GeoPandas
-def gpd_to_json(id_list, infile=INDIA_GRID_SHAPEFILE_PATH):
+def gpd_to_json(id_list, infile=INDIA_GRID_SHAPEFILE_PATH, separate=True):
     # read the shapefile
     gdf = gpd.read_file(infile)
     
@@ -29,11 +30,14 @@ def gpd_to_json(id_list, infile=INDIA_GRID_SHAPEFILE_PATH):
     gdf = gdf.loc[gdf['ID'].isin(id_list)]
     
     # extract bounding box of each of the filtered polygons
-    gdf_bbox = [
-        row.geometry.bounds
-        for idx, row in gdf.iterrows()
-               ]
-    
+    if separate == True:
+        gdf_bbox = [
+            (row['ID'], row.geometry.bounds)
+            for idx, row in gdf.iterrows()
+                   ]
+    else:
+        gdf_bbox = [(1, gdf.total_bounds)]
+
     # create GeoJSON using the bounds
     def get_bbox(bbox):
         lon_min, lat_min, lon_max, lat_max = bbox
@@ -51,8 +55,11 @@ def gpd_to_json(id_list, infile=INDIA_GRID_SHAPEFILE_PATH):
         "coordinates": [
             get_bbox(bounds_item)
         ],
+        "properties": {
+            'ID': id
+        }
     }
-    for bounds_item in gdf_bbox
+    for id, bounds_item in gdf_bbox
     ]
 
 # define a function to search for Sentinel-1 data
@@ -96,6 +103,42 @@ def search_sentinel_data(bbox, start_date=None, end_date=None):
 
     return all_results
 
+## define a function to get footprint of a given S1 item
+def s1item_footprint(item):
+    polygon = Polygon(item.geometry['coordinates'][0])
+
+    return gpd.GeoDataFrame({'ID':item.id, 'geometry': [polygon]}, crs='EPSG:4326')
+
+# define a function that calls the above function for a given ID list but separates the search items for each given ID
+def seggregate_sentinel_search(aoi_list, search_items):
+    # create GDF from the AOI list
+    aoi_footprints = gpd.GeoDataFrame([
+        {'ID': aoi['properties']['ID'], 'geometry': Polygon(aoi['coordinates'][0])}
+        for aoi in aoi_list],
+        crs='EPSG:4326'
+    )
+
+    # create GDF from the stac items list
+    s1_footprints = pd.concat([s1item_footprint(item) for item in search_items[1]], axis=0)
+
+    # create two dictionary to store two way information
+    aoi_scene_dict = {}
+    scene_aoi_dict = {}
+
+    # loop through AOI polygons to find intersecting scenes IDs
+    for idx, row in aoi_footprints.iterrows():
+        intersecting_s1scene_ids = s1_footprints[row.geometry.intersects(s1_footprints.geometry)]['ID'].values
+
+        aoi_scene_dict[row['ID']] = [item for item in search_items[1] if item.id in intersecting_s1scene_ids]
+
+    # loop through scenes IDs to find intersecting AOI polygons
+    for idx, row in s1_footprints.iterrows():
+        intersecting_aoi_ids = aoi_footprints[row.geometry.intersects(aoi_footprints.geometry)]['ID'].values
+
+        scene_aoi_dict[row['ID']] = list(intersecting_aoi_ids)
+
+    return aoi_scene_dict, scene_aoi_dict
+
 # define a function to export xarray.DataArray object to TIFF file
 def export_xarray(xarray_data, filename):
     with rasterio.Env():
@@ -120,15 +163,22 @@ def export_xarray(xarray_data, filename):
             'nodata': np.nan,
             'width': cols,
             'height': rows,
-            'count': xarray_data.shape[0],
+            'count': xarray_data.shape[0] if len(xarray_data.dims) == 3 else 1,
             'transform': rasterio.transform.from_bounds(xmin, ymin, xmax, ymax, cols, rows)
         }
 
         with rasterio.open(
                 filename,
                 'w', **profile) as dst:
-            for band in range(xarray_data.shape[0]):
-                dst.write(xarray_data.data[band, :, :], band+1)
+            # if input array is 2D
+            if len(xarray_data.dims) == 2:
+                dst.write(xarray_data.data, 1)
+            # if input data is 3D
+            elif len(xarray_data.dims) == 3:
+                for band in range(xarray_data.shape[0]):
+                    dst.write(xarray_data.data[band, :, :], band+1)
+            else:
+                raise('InputDataDimensionError: Unexpected number of dimensions found in the input data.')
 
 ###################################################################
 
