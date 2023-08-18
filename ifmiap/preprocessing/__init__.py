@@ -5,9 +5,10 @@ import rioxarray
 import geopandas as gpd
 from ..utils import INDIA_GRID_SHAPEFILE_PATH
 import xarray as xr
+import numpy as np
 
 # define a function to read and reproject VV and VH tif files from the cloud
-def read_reproj_clip(stac_item, id_list):
+def read_reproj_clip(stac_item, id):
     # get the URL to the VV and VH bands
     vv_href = stac_item.assets["vv"].href
     vh_href = stac_item.assets["vh"].href
@@ -22,7 +23,7 @@ def read_reproj_clip(stac_item, id_list):
 
     # read the shapefile and filter it to use for clipping
     gdf = gpd.read_file(INDIA_GRID_SHAPEFILE_PATH)
-    gdf = gdf.loc[gdf['ID'].isin(id_list)]
+    gdf = gdf.loc[gdf['ID'].isin([id])]
 
     # clip VV and VH bands for the given grid
     vv_ds = vv_ds.rio.clip(gdf.geometry)
@@ -34,12 +35,33 @@ def read_reproj_clip(stac_item, id_list):
     }
 
 # define a function to stack all the images for a given tile
-def stack_images(stac_list, id_list):
-    # call the previous function
+def stack_images(stac_list, id):
+    # call the previous function to read, reproject and clip images
     stacked_images = [
-        read_reproj_clip(stac_item, id_list)
+        read_reproj_clip(stac_item, id)
         for stac_item in stac_list
     ]
+
+    # extract common resolution
+    cell_size = float(stacked_images[0]['vv_ds'].spatial_ref.GeoTransform.split(' ')[1])
+
+    ## ensure that all the images are of the same resolution and extent
+    # extract target extent from the grid polygon
+    gdf = gpd.read_file(INDIA_GRID_SHAPEFILE_PATH)
+    gdf = gdf.loc[gdf['ID'].isin([id])]
+    x_min, y_min, x_max, y_max = gdf.total_bounds
+
+    # loop through each of the grid shapefile and process their respective images separately
+    # Resample each DataArray to the common extent and resolution
+    stacked_images = [{
+        'vv_ds': item['vv_ds'].interp(x=np.arange(x_min, x_max, cell_size),
+                                      y=np.arange(y_min, y_max, cell_size)),
+        'vh_ds': item['vh_ds'].interp(x=np.arange(x_min, x_max, cell_size),
+                                      y=np.arange(y_min, y_max, cell_size))
+        }
+        for item in stacked_images
+        ]
+
 
     # stack the data properly
     vv_stack = xr.concat([item['vv_ds'] for item in stacked_images], dim="band")
