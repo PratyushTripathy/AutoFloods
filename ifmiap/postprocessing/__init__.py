@@ -20,6 +20,10 @@ def polygonize_flood_raster(flood_data):
     # assign a CRS (Coordinate Reference System) to the GDF
     gdf.crs = data.rio.crs.to_string()
 
+    # for some reason, the polygonised layer is vertically flipped with y min as the origin, correct that
+    center_top_point = ((gdf.total_bounds[0] + gdf.total_bounds[2]) / 2, gdf.total_bounds[3])
+    gdf['geometry'] = gdf['geometry'].scale(xfact=1, yfact=-1, origin=center_top_point)
+
     return gdf
 
 

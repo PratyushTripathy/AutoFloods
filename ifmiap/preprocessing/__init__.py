@@ -7,8 +7,8 @@ from ..utils import INDIA_GRID_SHAPEFILE_PATH
 import xarray as xr
 import numpy as np
 
-# define a function to read and reproject VV and VH tif files from the cloud
-def read_reproj_clip(stac_item, id):
+# define a function to reproject VV and VH tif files from the cloud and store all images in memory
+def read_reproject(stac_item):
     # get the URL to the VV and VH bands
     vv_href = stac_item.assets["vv"].href
     vh_href = stac_item.assets["vh"].href
@@ -21,25 +21,34 @@ def read_reproj_clip(stac_item, id):
     vv_ds = vv_ds.rio.reproject("EPSG:4326")
     vh_ds = vh_ds.rio.reproject("EPSG:4326")
 
+    return stac_item.id, {
+            'vv_ds': vv_ds,
+            'vh_ds': vh_ds
+        }
+
+
+# define a function to clip the reprojected data to the given polygon extent
+def clip_stac(reprojected_dict, aoi_scene_dict, id):
     # read the shapefile and filter it to use for clipping
     gdf = gpd.read_file(INDIA_GRID_SHAPEFILE_PATH)
     gdf = gdf.loc[gdf['ID'].isin([id])]
 
     # clip VV and VH bands for the given grid
-    vv_ds = vv_ds.rio.clip(gdf.geometry)
-    vh_ds = vh_ds.rio.clip(gdf.geometry)
-
     return {
-        'vv_ds': vv_ds,
-        'vh_ds': vh_ds
+        stac_id: {
+            'vv_ds': reprojected_dict[stac_id]['vv_ds'].rio.clip(gdf.geometry),
+            'vh_ds': reprojected_dict[stac_id]['vh_ds'].rio.clip(gdf.geometry)
+        }
+        for stac_id in aoi_scene_dict[id]
     }
 
+
 # define a function to stack all the images for a given tile
-def stack_images(stac_list, id):
-    # call the previous function to read, reproject and clip images
+def stack_images(clipped_dict, id):
+    # create a list of dictionaries containing 'vv_ds' and 'vh_ds'
     stacked_images = [
-        read_reproj_clip(stac_item, id)
-        for stac_item in stac_list
+        clipped_dict[stac_id]
+        for stac_id in clipped_dict
     ]
 
     # extract common resolution
@@ -61,7 +70,6 @@ def stack_images(stac_list, id):
         }
         for item in stacked_images
         ]
-
 
     # stack the data properly
     vv_stack = xr.concat([item['vv_ds'] for item in stacked_images], dim="band")
