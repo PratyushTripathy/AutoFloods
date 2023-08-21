@@ -1,7 +1,7 @@
 # ifmiap/utils/__init__.py
 
 # import required libraries
-from datetime import datetime
+import datetime
 import pandas as pd
 import geopandas as gpd
 from ..authenticate import sign_in
@@ -16,23 +16,35 @@ CATALOG = sign_in()
 
 # this function creates python datetime objects using a given date and number of days to advance
 def date_range(start, days):
-    temp_date = pd.date_range(datetime.strptime(start, '%d/%m/%Y'), periods=days+1, freq='D')
+    temp_date = pd.date_range(datetime.datetime.strptime(start, '%d/%m/%Y'), periods=days+1, freq='D')
 
     return (temp_date.min().date(), temp_date.max().date())
 
 
+# define a function to format string correctly and create date range
+def string_to_date_range(start, end):
+    start_year, start_month = start.split('/')
+    end_year, end_month = end.split('/')
+
+    delta_days_end = (datetime.date(int(end_year), int(end_month) % 12 + 1, 1) - datetime.timedelta(days=1)).day
+
+    return (
+        datetime.datetime.strptime(f'01/{start_month}/{start_year}', '%d/%m/%Y').date(),
+        datetime.datetime.strptime(f'{delta_days_end:02d}/{end_month}/{end_year}', '%d/%m/%Y').date()
+    )
+
 # define a function to get bounding box as json from a shapefile using GeoPandas
-def gpd_to_json(id_list, infile=INDIA_GRID_SHAPEFILE_PATH, separate=True):
+def gpd_to_json(id_list, infile=INDIA_GRID_SHAPEFILE_PATH, separate=True, id_key='ID'):
     # read the shapefile
     gdf = gpd.read_file(infile)
     
     # filter using the given ID list
-    gdf = gdf.loc[gdf['ID'].isin(id_list)]
+    gdf = gdf.loc[gdf[id_key].isin(id_list)]
     
     # extract bounding box of each of the filtered polygons
     if separate == True:
         gdf_bbox = [
-            (row['ID'], row.geometry.bounds)
+            (row[id_key], row.geometry.bounds)
             for idx, row in gdf.iterrows()
                    ]
     else:
@@ -56,7 +68,7 @@ def gpd_to_json(id_list, infile=INDIA_GRID_SHAPEFILE_PATH, separate=True):
             get_bbox(bounds_item)
         ],
         "properties": {
-            'ID': id
+            id_key: id
         }
     }
     for id, bounds_item in gdf_bbox
