@@ -64,9 +64,9 @@ def stack_images(clipped_dict, id):
     # Resample each DataArray to the common extent and resolution
     stacked_images = [{
         'vv_ds': item['vv_ds'].interp(x=np.arange(x_min, x_max, cell_size),
-                                      y=np.arange(y_min, y_max, cell_size)),
+                                      y=np.arange(y_max, y_min, -cell_size)),
         'vh_ds': item['vh_ds'].interp(x=np.arange(x_min, x_max, cell_size),
-                                      y=np.arange(y_min, y_max, cell_size))
+                                      y=np.arange(y_max, y_min, -cell_size))
         }
         for item in stacked_images
         ]
