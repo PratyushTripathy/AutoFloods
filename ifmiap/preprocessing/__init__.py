@@ -8,14 +8,14 @@ import xarray as xr
 import numpy as np
 
 # define a function to reproject VV and VH tif files from the cloud and store all images in memory
-def read_reproject(stac_item):
+def read_reproject(stac_item, overview_level=3):
     # get the URL to the VV and VH bands
     vv_href = stac_item.assets["vv"].href
     vh_href = stac_item.assets["vh"].href
 
     # read the VV and VH bands
-    vv_ds = rioxarray.open_rasterio(vv_href, overview_level=3, masked=True)
-    vh_ds = rioxarray.open_rasterio(vh_href, overview_level=3, masked=True)
+    vv_ds = rioxarray.open_rasterio(vv_href, overview_level=overview_level, masked=True)
+    vh_ds = rioxarray.open_rasterio(vh_href, overview_level=overview_level, masked=True)
 
     # reproject the VV and VH bands
     vv_ds = vv_ds.rio.reproject("EPSG:4326")
