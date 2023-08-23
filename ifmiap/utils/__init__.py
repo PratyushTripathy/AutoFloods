@@ -141,13 +141,17 @@ def seggregate_sentinel_search(aoi_list, search_items):
     for idx, row in aoi_footprints.iterrows():
         intersecting_s1scene_ids = s1_footprints[row.geometry.intersects(s1_footprints.geometry)]['ID'].values
 
-        aoi_scene_dict[row['ID']] = [item.id for item in search_items[1] if item.id in intersecting_s1scene_ids]
+        # Converting key to int because JSON export causes problems
+        # with numpy integer data types while exporting json.
+        aoi_scene_dict[int(row['ID'])] = [item.id for item in search_items[1] if item.id in intersecting_s1scene_ids]
 
     # loop through scenes IDs to find intersecting AOI polygons
     for idx, row in s1_footprints.iterrows():
         intersecting_aoi_ids = aoi_footprints[row.geometry.intersects(aoi_footprints.geometry)]['ID'].values
 
-        scene_aoi_dict[row['ID']] = list(intersecting_aoi_ids)
+        # Converting items to int inside list comprehension because JSON export causes problems
+        # with numpy integer data types while exporting json.
+        scene_aoi_dict[row['ID']] = [int(item) for item in list(intersecting_aoi_ids)]
 
     return aoi_scene_dict, scene_aoi_dict
 
