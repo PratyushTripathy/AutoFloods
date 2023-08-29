@@ -3,6 +3,25 @@
 
 # define a function to identify anomaly cells (flood cells)
 def anomaly_cells(pre_stack, post_stack, vv_thd, vh_thd):
+    """
+    Detect Anomaly and Flood Cells in Multi-Band Stacks
+
+    This function takes multi-band stacks of pre- and post-flood images for VV and VH bands,
+    along with specified thresholds, and detects anomaly and flood cells based on statistical
+    analysis of the image data.
+
+    Parameters
+    __________
+    pre_stack (dict)        : A dictionary containing multi-band stacked pre-flood DataArrays for VV and VH bands.
+    post_stack (dict)       : A dictionary containing multi-band stacked post-flood DataArrays for VV and VH bands.
+    vv_thd (float)          : Threshold for anomaly detection in the VV band.
+    vh_thd (float)          : Threshold for anomaly detection in the VH band.
+
+    Returns
+    _______
+    xarray.DataArray        : A DataArray indicating combined anomaly and flood cells.
+
+    """
     # calculate anomaly and flood cells for VV band
     pre_mean_vv = pre_stack['vv_stack'].mean(axis=0)
     pre_std_vv = pre_stack['vv_stack'].std(axis=0)

@@ -48,7 +48,7 @@ class flood_mapper():
 
     def get_dry_dates(self):
         """
-        THis method extract dry months from the attributes of the shapefile.
+        This method extract dry months from the attributes of the shapefile.
         Returns:
 
         """
