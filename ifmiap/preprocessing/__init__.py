@@ -7,8 +7,25 @@ from ..utils import INDIA_GRID_SHAPEFILE_PATH
 import xarray as xr
 import numpy as np
 
+
 # define a function to reproject VV and VH tif files from the cloud and store all images in memory
 def read_reproject(stac_item, overview_level=3):
+    """
+    Read and Reproject STAC Item's VV and VH Bands
+
+    This function reads Very High Resolution (VV) and Very High Resolution (VH) bands from a
+    SpatioTemporal Asset Catalog (STAC) Item and reprojects them to EPSG:4326 coordinate system.
+
+    Parameters
+    __________
+    stac_item (dict)                : A STAC Item containing metadata and asset information.
+    overview_level (int, optional)  : The level of overviews to use for reading the data. Default is 3.
+
+    Returns
+    _______
+    tuple: A tuple containing the STAC Item ID and a dictionary of reprojected DataArrays.
+
+    """
     # get the URL to the VV and VH bands
     vv_href = stac_item.assets["vv"].href
     vh_href = stac_item.assets["vh"].href
@@ -22,13 +39,31 @@ def read_reproject(stac_item, overview_level=3):
     vh_ds = vh_ds.rio.reproject("EPSG:4326")
 
     return stac_item.id, {
-            'vv_ds': vv_ds,
-            'vh_ds': vh_ds
-        }
+        'vv_ds': vv_ds,
+        'vh_ds': vh_ds
+    }
 
 
 # define a function to clip the reprojected data to the given polygon extent
 def clip_stac(reprojected_dict, aoi_scene_dict, id):
+    """
+    Clip Reprojected DataArrays Using a Shapefile
+
+    This function takes a dictionary of reprojected DataArrays, a dictionary mapping scene IDs
+    to area of interest (AOI) IDs, and an AOI ID. It uses a shapefile to perform clipping on
+    the reprojected DataArrays corresponding to the given AOI ID.
+
+    Parameters
+    __________
+    reprojected_dict (dict)     : A dictionary containing reprojected DataArrays with scene IDs as keys.
+    aoi_scene_dict (dict)       : A dictionary mapping AOI IDs to lists of scene IDs.
+    id (str)                    : The AOI ID for which clipping should be performed.
+
+    Returns
+    _______
+    dict: A dictionary containing clipped DataArrays for the specified AOI ID and scene IDs.
+
+    """
     # read the shapefile and filter it to use for clipping
     gdf = gpd.read_file(INDIA_GRID_SHAPEFILE_PATH)
     gdf = gdf.loc[gdf['ID'].isin([id])]
@@ -45,6 +80,23 @@ def clip_stac(reprojected_dict, aoi_scene_dict, id):
 
 # define a function to stack all the images for a given tile
 def stack_images(clipped_dict, id):
+    """
+    Stack Clipped DataArrays into Multi-Band Stacks
+
+    This function takes a dictionary of clipped DataArrays, each containing 'vv_ds' and 'vh_ds'
+    bands for different scenes, and stacks them into multi-band stacks. The function ensures that
+    the input DataArrays are resampled to a common extent and resolution before stacking.
+
+    Parameters
+    __________
+    clipped_dict (dict)     : A dictionary containing clipped DataArrays for different scenes.
+    id (str)                : The AOI ID for which stacking should be performed.
+
+    Returns
+    _______
+    dict                    : A dictionary containing multi-band stacked DataArrays for both VV and VH bands.
+
+    """
     # create a list of dictionaries containing 'vv_ds' and 'vh_ds'
     stacked_images = [
         clipped_dict[stac_id]
@@ -67,9 +119,9 @@ def stack_images(clipped_dict, id):
                                       y=np.arange(y_max, y_min, -cell_size)),
         'vh_ds': item['vh_ds'].interp(x=np.arange(x_min, x_max, cell_size),
                                       y=np.arange(y_max, y_min, -cell_size))
-        }
+    }
         for item in stacked_images
-        ]
+    ]
 
     # stack the data properly
     vv_stack = xr.concat([item['vv_ds'] for item in stacked_images], dim="band")
@@ -79,6 +131,7 @@ def stack_images(clipped_dict, id):
         'vv_stack': vv_stack,
         'vh_stack': vh_stack
     }
+
 
 ###############################################################
 
@@ -90,8 +143,7 @@ import rioxarray
 import multiprocessing
 import datetime
 from functools import partial
-from ifmiap.utils import load_grid_shapefile, shapefile_path, grid_bounds, search_sentinel_data,filter_items_dryPeriod
-
+from ifmiap.utils import load_grid_shapefile, shapefile_path, grid_bounds, search_sentinel_data, filter_items_dryPeriod
 
 
 def get_grid_data_dry_period(catalog, n):
@@ -122,6 +174,7 @@ def get_grid_data_dry_period(catalog, n):
     filtered_grid_data_results = filter_items_dryPeriod(grid_data_results)
     # Return the filtered grid data for dry periods
     return filtered_grid_data_results
+
 
 def reproject_and_resample(vv_clipped, vh_clipped, target_resolution):
     """

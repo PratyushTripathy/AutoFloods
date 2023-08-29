@@ -1,4 +1,4 @@
- # ifmiap/authenticate/__init__.py
+#ifmiap/authenticate/__init__.py
 
 import os, pystac_client, planetary_computer
 
@@ -7,7 +7,7 @@ def sign_in():
     Authenticates the user and returns a catalog object for accessing STAC data.
 
     Returns:
-        catalog (pystac_client.Client): A catalog object providing access to STAC data.
+    catalog (pystac_client.Client): A catalog object providing access to STAC data.
 
     """
     catalog = pystac_client.Client.open(
