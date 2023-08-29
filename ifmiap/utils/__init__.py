@@ -16,6 +16,25 @@ CATALOG = sign_in()
 
 # this function creates python datetime objects using a given date and number of days to advance
 def date_range(start, days):
+    """
+    Generate a Date Range
+
+      This function takes a start date and a number of days, and generates a date range
+      that includes the start date and the specified number of days.
+
+    Parameters:
+          start (str): The start date in the format 'dd/mm/yyyy'.
+          days (int): The number of days to generate in the date range.
+
+    Returns:
+          tuple: A tuple containing the minimum and maximum dates in the generated range.
+
+    Example:
+          >>> start_date = '01/08/2023'
+          >>> num_days = 10
+          >>> date_min, date_max = date_range(start_date, num_days)
+
+    """
     temp_date = pd.date_range(datetime.datetime.strptime(start, '%d/%m/%Y'), periods=days+1, freq='D')
 
     return (temp_date.min().date(), temp_date.max().date())
@@ -23,6 +42,16 @@ def date_range(start, days):
 
 # define a function to format string correctly and create date range
 def string_to_date_range(start, end):
+    """
+    Convert Start and End Strings to Date Range
+
+    Converts start and end date strings to a date range.
+
+    :param start: Start date (format 'dd/mm/yyyy').
+    :param end: End date (format 'dd/mm/yyyy').
+    :return: Tuple (start date, end date).
+
+    """
     start_year, start_month = start.split('/')
     end_year, end_month = end.split('/')
 
@@ -35,6 +64,20 @@ def string_to_date_range(start, end):
 
 # define a function to get bounding box as json from a shapefile using GeoPandas
 def gpd_to_json(id_list, infile=INDIA_GRID_SHAPEFILE_PATH, separate=True, id_key='ID'):
+    """
+    Converts selected polygons from a GeoDataFrame to GeoJSON format.
+
+    This function reads a shapefile using GeoPandas, filters the polygons based on the provided ID list,
+    and then generates GeoJSON representations of the filtered polygons' bounding boxes.
+    :param id_list: A list of IDs to filter the polygons in the GeoDataFrame.
+    :param infile: The path to the input shapefile. Default is INDIA_GRID_SHAPEFILE_PATH.
+    :param separate: If True, each polygon's bounding box will be generated separately in GeoJSON.
+                                  If False, a single bounding box covering all filtered polygons will be generated.
+                                  Default is True.
+    :param id_key: The key representing the ID field in the GeoDataFrame. Default is 'ID'.
+    :return:  list: A list of dictionaries representing GeoJSON polygons.
+
+    """
     # read the shapefile
     gdf = gpd.read_file(infile)
     
@@ -117,12 +160,43 @@ def search_sentinel_data(bbox, start_date=None, end_date=None):
 
 ## define a function to get footprint of a given S1 item
 def s1item_footprint(item):
+    """
+    Create a GeoDataFrame containing the footprint polygon of a Sentinel-1 item.
+
+    Parameters:
+    -----------
+    item: The Sentinel-1 item containing geometry information
+
+    Returns
+    _______
+    A GeoDataFrame containing the footprint polygon with the 'ID' and 'geometry' columns.
+    """
     polygon = Polygon(item.geometry['coordinates'][0])
 
     return gpd.GeoDataFrame({'ID':item.id, 'geometry': [polygon]}, crs='EPSG:4326')
 
 # define a function that calls the above function for a given ID list but separates the search items for each given ID
 def seggregate_sentinel_search(aoi_list, search_items):
+    """
+    Segregate Sentinel search results based on intersecting Area of Interest (AOI) polygons.
+
+    This function takes a list of AOI polygons and a list of search items (such as Sentinel-1 scenes).
+    It identifies which search items intersect with each AOI and vice versa, creating dictionaries to store
+    this information.
+
+    Parameters
+    -----------
+    aoi_list        : A list of AOI polygons in GeoJSON-like format.
+    search_items    : A tuple containing two lists of search items.
+                              The first list is not used in this function.
+                              The second list contains the search items (e.g., Sentinel-1 scenes) to process.
+
+    Returns
+    -------
+    tuple           : A tuple containing two dictionaries.
+                      The first dictionary maps AOI IDs to lists of intersecting search item IDs.
+                      The second dictionary maps search item IDs to lists of intersecting AOI IDs.
+    """
     # create GDF from the AOI list
     aoi_footprints = gpd.GeoDataFrame([
         {'ID': aoi['properties']['ID'], 'geometry': Polygon(aoi['coordinates'][0])}
@@ -157,6 +231,22 @@ def seggregate_sentinel_search(aoi_list, search_items):
 
 # define a function to export xarray.DataArray object to TIFF file
 def export_xarray(xarray_data, filename):
+    """
+    Export Xarray data as a GeoTIFF file.
+
+    This function takes an Xarray dataset or data array and exports it as a GeoTIFF file. It calculates
+    the bounding box and other necessary metadata from the Xarray data and writes it to the specified file.
+
+    Parameters
+    ----------
+    xarray_data                 : The Xarray dataset or data array to be exported.
+    filename                    : The path and filename of the output GeoTIFF file.
+
+    Raises
+    ______
+    InputDataDimensionError     : Raised when the input data has an unexpected number of dimensions.
+
+    """
     with rasterio.Env():
         xmin, ymin, xmax, ymax = [
             xarray_data.x.min().values,

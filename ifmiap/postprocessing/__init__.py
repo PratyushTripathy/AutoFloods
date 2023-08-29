@@ -10,6 +10,21 @@ import pandas as pd
 
 # define a function to polygonize the flood raster
 def polygonize_flood_raster(flood_data):
+    """
+    Polygonize Flood Raster Data
+
+    This function takes a raster data representing flood extents and polygonizes it to create a
+    GeoDataFrame containing polygons representing flooded areas.
+
+    Parameters
+    __________
+    flood_data (xarray.DataArray)       : A DataArray containing raster flood data.
+
+    Returns
+    _______
+    geopandas.GeoDataFrame              : A GeoDataFrame containing polygons representing flooded areas.
+
+    """
     data = flood_data.astype('uint8')
     shapes_gen = rasterio.features.shapes(data.values, mask=data.values != 0, transform=data.rio.transform())
     polygons = [shape(geom) for geom, value in shapes_gen if value == 3]  # Adjust the condition as needed
