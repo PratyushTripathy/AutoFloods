@@ -1,16 +1,18 @@
 # ifmiap/utils/__init__.py
 
 # import required libraries
-import datetime
+import datetime, glob, os
 import pandas as pd
 import geopandas as gpd
 from ..authenticate import sign_in
 import rasterio
 import numpy as np
 from shapely.geometry import Polygon
+import rioxarray
+from rioxarray import merge as rioxarray_merge
 
 # DEFINE constants
-INDIA_GRID_SHAPEFILE_PATH = r'resources/india_fishnet_4326.shp'
+INDIA_GRID_SHAPEFILE_PATH = r'resources/india_utm_fishnet.gpkg'
 CATALOG = sign_in()
 
 
@@ -63,7 +65,7 @@ def string_to_date_range(start, end):
     )
 
 # define a function to get bounding box as json from a shapefile using GeoPandas
-def gpd_to_json(id_list, infile=INDIA_GRID_SHAPEFILE_PATH, separate=True, id_key='ID'):
+def gpd_to_json(id_list, infile=INDIA_GRID_SHAPEFILE_PATH, separate=True, id_key='ID', zone_key='zone'):
     """
     Converts selected polygons from a GeoDataFrame to GeoJSON format.
 
@@ -78,6 +80,19 @@ def gpd_to_json(id_list, infile=INDIA_GRID_SHAPEFILE_PATH, separate=True, id_key
     :return:  list: A list of dictionaries representing GeoJSON polygons.
 
     """
+    # create GeoJSON using the bounds
+    def get_bbox(bbox):
+        lon_min, lat_min, lon_max, lat_max = bbox
+
+        return [
+            [lon_min, lat_min],
+            [lon_max, lat_min],
+            [lon_max, lat_max],
+            [lon_min, lat_max],
+            [lon_min, lat_min]
+        ]
+
+
     # read the shapefile
     gdf = gpd.read_file(infile)
     
@@ -87,35 +102,38 @@ def gpd_to_json(id_list, infile=INDIA_GRID_SHAPEFILE_PATH, separate=True, id_key
     # extract bounding box of each of the filtered polygons
     if separate == True:
         gdf_bbox = [
-            (row[id_key], row.geometry.bounds)
+            (row[id_key], row[zone_key], row.geometry.bounds)
             for idx, row in gdf.iterrows()
                    ]
+
+        return [{
+            "type": "Polygon",
+            "coordinates": [
+                get_bbox(bounds_item)
+            ],
+            "properties": {
+                id_key: id,
+                zone_key: zone
+            }
+        }
+            for id, zone, bounds_item in gdf_bbox
+        ]
+
     else:
         gdf_bbox = [(1, gdf.total_bounds)]
 
-    # create GeoJSON using the bounds
-    def get_bbox(bbox):
-        lon_min, lat_min, lon_max, lat_max = bbox
-        
-        return [
-            [lon_min, lat_min],
-            [lon_max, lat_min],
-            [lon_max, lat_max],
-            [lon_min, lat_max],
-            [lon_min, lat_min]
-        ]
     
-    return [{
-        "type": "Polygon",
-        "coordinates": [
-            get_bbox(bounds_item)
-        ],
-        "properties": {
-            id_key: id
+        return [{
+            "type": "Polygon",
+            "coordinates": [
+                get_bbox(bounds_item)
+            ],
+            "properties": {
+                id_key: id
+            }
         }
-    }
-    for id, bounds_item in gdf_bbox
-    ]
+        for id, bounds_item in gdf_bbox
+        ]
 
 # define a function to search for Sentinel-1 data
 def search_sentinel_data(bbox, start_date=None, end_date=None):
@@ -229,6 +247,31 @@ def seggregate_sentinel_search(aoi_list, search_items):
 
     return aoi_scene_dict, scene_aoi_dict
 
+def query_nasadem(aoi_union_bbox):
+    # search for Sentinel-1 scenes
+    results = CATALOG.search(
+        collections=["nasadem"],
+        intersects=aoi_union_bbox
+    )
+
+    # select scenes that have VV and VH bands in them
+    return [
+        item
+        for item in results.get_items()
+        if 'elevation' in item.assets
+           ]
+
+def download_nasadem(bbox, overview_level=1, nodata=0.0):
+    dem_item_list = query_nasadem(bbox)
+    dem_xarray_list = [
+        rioxarray.open_rasterio(item.assets['elevation'].href, overview_level=overview_level, masked=True)
+        for item in dem_item_list
+    ]
+
+    mosaic_xarray = rioxarray_merge.merge_arrays(dem_xarray_list, nodata=nodata)
+
+    return mosaic_xarray
+
 # define a function to export xarray.DataArray object to TIFF file
 def export_xarray(xarray_data, filename):
     """
@@ -286,129 +329,38 @@ def export_xarray(xarray_data, filename):
             else:
                 raise('InputDataDimensionError: Unexpected number of dimensions found in the input data.')
 
-###################################################################
 
+# define a function to merge the exported flood extent file using date
+def merge_flood_gdfs(flood_dir):
+    # get the list of files present in the directory
+    files_list = glob.glob(f'{flood_dir}/*.gpkg')
 
-from shapely.geometry import box
-import geopandas as gpd
-shapefile_path = "resources/Grid_shapefile/shp_4326.shp"
+    # extract unique dates from the flood vector file names
+    unique_dates = [file.split('_')[5][:8] for file in files_list]
 
+    # merge
+    gdf_union = pd.concat([
+        gpd.read_file(file).assign(id=[file] * gpd.read_file(file).shape[0])
+        for file in files_list
+    ], axis=0)
 
-def load_grid_shapefile(shapefile_path):
-    """
-    Load a grid shapefile as a GeoDataFrame.
+    # dissolve flood extent shapefile
+    gdf_union['date'] = gdf_union.id.apply(lambda x: x.split('_')[5][:8])
+    gdf_union['tile_id'] = gdf_union['id'].apply(lambda x: x.split('_')[4])
+    gdf_union['uid'] = gdf_union['tile_id'] + '_' + gdf_union['date']
+    dry_years = gdf_union.id.apply(lambda x: '_'.join(x.split('_')[2:4])).values[0]
 
-    Parameters:
-    -----------
-    shapefile_path    : string
-                        The file path to the grid shapefile.
+    # dissolve
+    gdf_union = gdf_union.dissolve('uid')[['geometry', 'date', 'tile_id']]
 
-    Returns:
-    --------
-    GeoDataFrame      : GeoPandas.GeoDataFrame
-                        A GeoDataFrame representing the grid polygons loaded from the shapefile.
-    """
-    # Load the grid shapefile using GeoPandas' read_file function
-    grid_gdf = gpd.read_file(shapefile_path)
-    # Return the loaded GeoDataFrame
-    return grid_gdf
+    # export tile wise flood extent
+    for tile_id in gdf_union['tile_id'].unique():
+        temp_gdf = gdf_union.loc[gdf_union['tile_id'] == tile_id]
 
+        outfile = os.path.join(
+            flood_dir.replace('flood_vector', 'final_output'),
+            f'{dry_years}_{tile_id}_FloodExtent.gpkg'
+        )
 
+        temp_gdf.to_file(outfile)
 
-def filter_items_dryPeriod(all_results):
-    """
-        Filter items from the provided list based on their intersection with the grid shapefile.
-
-        Parameters:
-            all_results (list): A list of pystac.Item objects containing the Sentinel-1 data.
-
-        Returns:
-            list: A filtered list of pystac.Item objects that intersect with the grid shapefile.
-
-        Raises:
-            None.
-    """
-    gdf_shapefile = load_grid_shapefile(shapefile_path)
-    filtered_items = []
-    for item in all_results:
-        coordinates = item.geometry['coordinates']
-        if len(coordinates) > 0:
-            coords = coordinates[0]
-            minx, miny = coords[0][0], coords[0][1]
-            maxx, maxy = coords[2][0], coords[2][1]
-            bbox = box(minx, miny, maxx, maxy)
-            if gdf_shapefile.intersects(bbox).any():
-                filtered_items.append(item)
-    return filtered_items
-
-
-def filter_items_floodPeriod(all_results):
-    """
-        Filter items from the provided list based on their intersection with the grid shapefile.
-
-        Parameters:
-            all_results (list): A list of pystac.Item objects containing the Sentinel-1 data.
-
-        Returns:
-            tuple: A tuple containing:
-                - A filtered list of pystac.Item objects that intersect with the grid shapefile.
-                - A list of intersecting grid IDs.
-                - A list of intersecting grid geometries.
-
-        Raises:
-            None.
-    """
-    # Specify the path to the Grid_shapefile
-    grid_gdf = load_grid_shapefile(shapefile_path)
-    intersecting_ids = []
-    intersecting_geometries = []
-    filtered_items = []
-    for item in all_results:
-        coordinates = item.geometry['coordinates']
-        if len(coordinates) > 0:
-            coords = coordinates[0]
-            minx, miny = coords[0][0], coords[0][1]
-            maxx, maxy = coords[2][0], coords[2][1]
-            bbox = box(minx, miny, maxx, maxy)
-            if grid_gdf.intersects(bbox).any():
-                intersecting_ids.extend(grid_gdf.loc[grid_gdf.intersects(bbox), 'id'])
-                intersecting_geometries.extend(grid_gdf.loc[grid_gdf.intersects(bbox), 'geometry'])
-                filtered_items.append(item)
-
-    return filtered_items, intersecting_ids, intersecting_geometries
-
-
-def grid_bounds():
-    """
-        Extracts the bounding box coordinates from the grid shapefile and creates a bounding box of interest.
-
-        Parameters:
-            None.
-
-        Returns:
-            dict: A dictionary representing the bounding box of interest in the desired format.
-
-        Raises:
-            None.
-    """
-    grid = load_grid_shapefile(shapefile_path)
-    # Extract the bounding box coordinates
-    minx, miny, maxx, maxy = grid.total_bounds
-
-    # Create the bounding box coordinates in the desired format
-    bbox_coordinates = [
-        [minx, miny],
-        [maxx, miny],
-        [maxx, maxy],
-        [minx, maxy],
-        [minx, miny]
-    ]
-    bbox_of_interest = {
-
-        "coordinates": [
-            [
-                bbox_coordinates
-            ]
-        ],
-    }
-    return bbox_of_interest

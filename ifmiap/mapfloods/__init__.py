@@ -1,8 +1,13 @@
 # ifmiap/mapfloods/__init__.py
+import os
+import xarray as xr
+import matplotlib.pyplot as plt
 
+# switch off displaying maps
+plt.ioff()
 
 # define a function to identify anomaly cells (flood cells)
-def anomaly_cells(pre_stack, post_stack, vv_thd, vh_thd):
+def map_anomaly_cells(pre_xarray, post_xarray, vv_thd, vh_thd):
     """
     Detect Anomaly and Flood Cells in Multi-Band Stacks
 
@@ -23,103 +28,78 @@ def anomaly_cells(pre_stack, post_stack, vv_thd, vh_thd):
 
     """
     # calculate anomaly and flood cells for VV band
-    pre_mean_vv = pre_stack['vv_stack'].mean(axis=0)
-    pre_std_vv = pre_stack['vv_stack'].std(axis=0)
-    anomaly_vv = (post_stack['vv_stack'].mean(axis=0) - pre_mean_vv) / pre_std_vv
+    anomaly_vv = (post_xarray.loc['vv_ds'] - pre_xarray.loc['vv_mean']) / pre_xarray.loc['vv_std']
     floods_vv = (abs(anomaly_vv) > vv_thd).astype(int)
 
     # calculate anomaly and flood cells for VH band
-    pre_mean_vh = pre_stack['vh_stack'].mean(axis=0)
-    pre_std_vh = pre_stack['vh_stack'].std(axis=0)
-    anomaly_vh = (post_stack['vh_stack'].mean(axis=0) - pre_mean_vh) / pre_std_vh
+    anomaly_vh = (post_xarray.loc['vh_ds'] - pre_xarray.loc['vh_mean']) / pre_xarray.loc['vh_std']
     floods_vh = (abs(anomaly_vh) > vh_thd).astype(int)
-    floods_vh.values[floods_vv.values == 1] = 2
+
+    # here's what numbers in the flood map mean
+    # 1. flood cells identified in the VH band
+    # 2. flood cells identified in the VV band
+    # 3. flood cells identified in both VV and VH bands
+    # handling conditional update was real pain, be cautious in future
+    combined_floods = floods_vv + floods_vh
+    combined_floods = combined_floods.where(floods_vh.values != 1, 1)
+    combined_floods = combined_floods.where(floods_vv.values != 1, 2)
+    combined_floods = combined_floods.where((floods_vv + floods_vh).values != 2, 3)
 
     # combine flood extent for VV and VH bands
-    combined_floods = floods_vv + floods_vh
 
     return combined_floods
 
 
-
-
-
-
-
-
-############################################################
-
-
-import os
-import matplotlib.pyplot as plt
-import numpy as np
-import rasterio
-import xarray as xr
-
-
-def map_floods(vv_flood_extent, vh_flood_extent, image_ids, grid_ids, geometry_ids):
-    """
-        Generates a flood map based on the flood extent arrays for VV and VH data.
-
-        Args:
-            vv_flood_extent (list): List of flood extent arrays for VV data.
-            vh_flood_extent (list): List of flood extent arrays for VH data.
-            vv_during_stack (ndarray): Stack of VV data during the flood period.
-            nearest_date (str): Nearest date to the target date.
-            data_array: The data array associated with the flood extent arrays.
-
-        Returns:
-            None
-
-        """
-    # Loop through vv_flood_extent and vh_flood_extent lists
-    for i, j, image_id, grid_id, geometry_id in zip(vv_flood_extent, vh_flood_extent, image_ids, grid_ids,
-                                                    geometry_ids):
-        combined_flood_extent = i.astype(np.uint8) + j.astype(np.uint8)
-
-        total_pixels = combined_flood_extent.size
-        flood_pixels = (combined_flood_extent == 1).sum()
-        flood_percentage = (flood_pixels / total_pixels) * 100
-        threshold = 2
-        is_flood = flood_percentage > threshold
-        # Print the classification result
-        if is_flood:
-            print("The image represents a flood scene.")
-            export_flood_map(combined_flood_extent, image_id, grid_id, geometry_id)
-        else:
-            print("The image does not represent a flood scene.")
-
-
-def export_flood_map(combined_flood_extent, image_id, grid_id, geometry_id):
-    """
-        Exports the flood map as a GeoTIFF file.
-
-        Args:
-            combined_flood_extent (ndarray): Combined flood extent array.
-            data_array: The data array associated with the flood extent arrays.
-
-        Returns:
-            None
-
-        """
-    image_id = image_id
-    grid_id = grid_id
-    with rasterio.Env():
-        # Create a xarray DataArray from the combined flood extent array
-        data = xr.DataArray(combined_flood_extent)
-        xmin, ymin, xmax, ymax = geometry_id.bounds
-        # Define the metadata for the output file
-        profile = {
-            'driver': 'GTiff',
-            'dtype': rasterio.float32,
-            'nodata': None,
-            'width': data.shape[1],
-            'height': data.shape[0],
-            'count': 1,
-            'transform': rasterio.transform.from_bounds(xmin, ymin, xmax, ymax, data.shape[1], data.shape[0])
+# define a function to map floods (identify anomaly cells and perform slope and elevaation mask)
+def map_floods(mean_std_by_aoi, wet_scenes_by_aoi, dem_path, vv_thd, vh_thd, dem_thd):
+    # generate id and scene wise anomaly cells
+    anomaly_dict = {
+        id: {
+            scene_id: map_anomaly_cells(
+                mean_std_by_aoi[id], wet_scenes_by_aoi[id][scene_id], vv_thd=vv_thd, vh_thd=vh_thd
+            )
+            for scene_id in wet_scenes_by_aoi[id]
         }
+        for id in mean_std_by_aoi
+    }
 
-        with rasterio.open(
-                "Flood_images_output/" + image_id + "_" + str(grid_id) + ".tif",
-                'w', **profile) as dst:
-            dst.write(data, 1)
+    # mask anomaly cells using DEM
+    for id in anomaly_dict:
+        dem_xarray = xr.load_dataarray(dem_path.replace('_id.nc', f'_{id}.nc'), engine='rasterio')
+        for scene_id in anomaly_dict[id]:
+            anomaly_dict[id][scene_id] = anomaly_dict[id][scene_id].where(dem_xarray.values[0, :, :] < dem_thd, 0)
+
+    return anomaly_dict
+
+
+# define a function to export flood maps as images
+def flood_images(flood_xarray, outfile_flood):
+    x_min = flood_xarray.x.min()
+    y_min = flood_xarray.y.min()
+    x_max = flood_xarray.x.max()
+    y_max = flood_xarray.y.max()
+
+    # export an image of the combined flood rasters
+    height, width = flood_xarray.shape
+    fig, ax = plt.subplots(1, 1, figsize=(width / 100, height / 100))
+
+    img = flood_xarray.plot(ax=ax, cmap='Blues')
+    img.colorbar.remove()
+
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.set_title(os.path.split(os.path.splitext(outfile_flood)[0])[-1])
+
+    plt.savefig(outfile_flood, bbox_inches='tight', dpi=100)
+
+
+
+
+
+
+
+
+
+
+
+
