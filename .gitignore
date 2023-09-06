@@ -1,3 +1,7 @@
+# Sphinx documentation
+doc/_build/
+.buildinfo
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
