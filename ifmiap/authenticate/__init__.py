@@ -10,6 +10,8 @@ def sign_in():
     catalog (pystac_client.Client): A catalog object providing access to STAC data.
 
     """
+    planetary_computer.settings.set_subscription_key('***REMOVED-KEY-SCRUBBED***')
+
     catalog = pystac_client.Client.open(
         "https://planetarycomputer.microsoft.com/api/stac/v1",
         modifier=planetary_computer.sign_inplace,

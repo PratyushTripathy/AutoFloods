@@ -2,6 +2,7 @@
 import os
 import xarray as xr
 import matplotlib.pyplot as plt
+import xrspatial
 
 # switch off displaying maps
 plt.ioff()
@@ -51,7 +52,7 @@ def map_anomaly_cells(pre_xarray, post_xarray, vv_thd, vh_thd):
 
 
 # define a function to map floods (identify anomaly cells and perform slope and elevaation mask)
-def map_floods(mean_std_by_aoi, wet_scenes_by_aoi, dem_path, vv_thd, vh_thd, dem_thd):
+def map_floods(mean_std_by_aoi, wet_scenes_by_aoi, dem_path, vv_thd, vh_thd, dem_thd, slp_thd):
     # generate id and scene wise anomaly cells
     anomaly_dict = {
         id: {
@@ -63,11 +64,13 @@ def map_floods(mean_std_by_aoi, wet_scenes_by_aoi, dem_path, vv_thd, vh_thd, dem
         for id in mean_std_by_aoi
     }
 
-    # mask anomaly cells using DEM
+    # apply elevation and slope mask
     for id in anomaly_dict:
         dem_xarray = xr.load_dataarray(dem_path.replace('_id.nc', f'_{id}.nc'), engine='rasterio')
+        slope_xarray = xrspatial.slope(dem_xarray.squeeze())
         for scene_id in anomaly_dict[id]:
             anomaly_dict[id][scene_id] = anomaly_dict[id][scene_id].where(dem_xarray.values[0, :, :] < dem_thd, 0)
+            anomaly_dict[id][scene_id] = anomaly_dict[id][scene_id].where(slope_xarray.values < slp_thd, 0)
 
     return anomaly_dict
 
