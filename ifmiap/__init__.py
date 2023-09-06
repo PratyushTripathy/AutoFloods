@@ -382,14 +382,15 @@ class flood_mapper():
             for id in self.wet_aoi_scene_dict
         }
 
-    def map_floods(self, vv_thd=2.5, vh_thd=2.5, dem_thd=600, export_raster=False, export_vector=False, export_maps=False):
+    def map_floods(self, vv_thd=2.5, vh_thd=2.5, dem_thd=600, slp_thd=25, export_raster=False, export_vector=False, export_maps=False):
         self.flood_dict = mapfloods.map_floods(
             mean_std_by_aoi=self.mean_std_by_aoi,
             wet_scenes_by_aoi=self.wet_scenes_by_aoi,
             dem_path=os.path.join(self.dem_dir, DEM_OUTFILE),
             vv_thd=vv_thd,
             vh_thd=vh_thd,
-            dem_thd=dem_thd
+            dem_thd=dem_thd,
+            slp_thd=slp_thd
         )
 
         dry_year_begin = min(self.dry_years)
@@ -427,7 +428,7 @@ class flood_mapper():
         if export_maps == True:
             for id in self.flood_dict:
                 for scene_id in self.flood_dict[id]:
-                    outfile_flood = FLOOD_MAP_OUTFILE.replace('_id.png', f'_{dry_year_begin}_{dry_year_end}_{id}_{"_".join(scene_id.split("_")[4:])}.tif')
+                    outfile_flood = FLOOD_MAP_OUTFILE.replace('_id.png', f'_{dry_year_begin}_{dry_year_end}_{id}_{"_".join(scene_id.split("_")[4:])}.png')
 
                     mapfloods.flood_images(
                         flood_xarray=self.flood_dict[id][scene_id],

@@ -164,7 +164,7 @@ def search_sentinel_data(bbox, start_date=None, end_date=None):
 
     # search for Sentinel-1 scenes
     results = CATALOG.search(
-        collections = ["sentinel-1-grd"],
+        collections = ["sentinel-1-rtc"],
         intersects = bbox,
         datetime = date_range
     )
