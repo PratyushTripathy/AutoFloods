@@ -7,3 +7,4 @@ doc/_build/
 
 __pycache__/
 *.xml
+.DS_Store
