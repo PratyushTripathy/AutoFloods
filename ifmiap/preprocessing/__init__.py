@@ -3,7 +3,6 @@
 # import required libraries
 import rioxarray
 import geopandas as gpd
-from ..utils import INDIA_GRID_SHAPEFILE_PATH
 import xarray as xr
 import numpy as np
 
@@ -46,7 +45,7 @@ def read_sentinel1_stac(stac_item, overview_level=3):
     }
 
 # define a function to clip the reprojected data to the given polygon extent
-def reproject_clip_stac(reprojected_dict, aoi_scene_dict, id):
+def reproject_clip_stac(reprojected_dict, aoi_scene_dict, grid_shapefile_path, id):
     """
     Clip Reprojected DataArrays Using a Shapefile
 
@@ -66,7 +65,7 @@ def reproject_clip_stac(reprojected_dict, aoi_scene_dict, id):
 
     """
     # read the shapefile and filter it to use for clipping
-    gdf = gpd.read_file(INDIA_GRID_SHAPEFILE_PATH)
+    gdf = gpd.read_file(grid_shapefile_path)
     gdf = gdf.loc[gdf['ID'].isin([id])]
 
     # extract the UTM zone from the tile, reproject the GDF to UTM
@@ -84,7 +83,7 @@ def reproject_clip_stac(reprojected_dict, aoi_scene_dict, id):
 
 
 # define a function to stack all the images for a given tile
-def stack_images(clipped_dict, id):
+def stack_images(clipped_dict, grid_shapefile_path, id):
     """
     Stack Clipped DataArrays into Multi-Band Stacks
 
@@ -108,24 +107,21 @@ def stack_images(clipped_dict, id):
         for stac_id in clipped_dict
     ]
 
-    # extract common resolution
-    cell_size = float(stacked_images[0]['vv_ds'].spatial_ref.GeoTransform.split(' ')[1])
-
-    ## ensure that all the images are of the same resolution and extent
-    # extract target extent from the grid polygon
-    gdf = gpd.read_file(INDIA_GRID_SHAPEFILE_PATH)
-    gdf = gdf.loc[gdf['ID'].isin([id])]
-    tile_utm_zone = 'EPSG:326{}'.format(gdf['zone'].values[0][:-1])
-    gdf = gdf.to_crs(tile_utm_zone)
-    x_min, y_min, x_max, y_max = gdf.total_bounds
-
     # loop through each of the grid shapefile and process their respective images separately
     # Resample each DataArray to the common extent and resolution
     stacked_images = [{
-        'vv_ds': item['vv_ds'].interp(x=np.arange(x_min, x_max, cell_size),
-                                      y=np.arange(y_max, y_min, -cell_size)),
-        'vh_ds': item['vh_ds'].interp(x=np.arange(x_min, x_max, cell_size),
-                                      y=np.arange(y_max, y_min, -cell_size))
+        'vv_ds': clip_xarray_using_id(
+            data_xarray=item['vv_ds'],
+            grid_shapefile_path=grid_shapefile_path,
+            aoi_id=id,
+            ref_xarray=stacked_images[0]['vv_ds']
+        ),
+        'vh_ds': clip_xarray_using_id(
+            data_xarray=item['vh_ds'],
+            grid_shapefile_path=grid_shapefile_path,
+            aoi_id=id,
+            ref_xarray=stacked_images[0]['vv_ds']
+        )
     }
         for item in stacked_images
     ]
@@ -139,12 +135,11 @@ def stack_images(clipped_dict, id):
         'vh_stack': vh_stack
     }
 
-
-def clip_xarray_using_id(data_xarray, aoi_id, ref_xarray):
+def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray):
     cell_size = float(ref_xarray.spatial_ref.GeoTransform.split(' ')[1])
 
     # extract target extent from the grid polygon
-    gdf = gpd.read_file(INDIA_GRID_SHAPEFILE_PATH)
+    gdf = gpd.read_file(grid_shapefile_path)
     gdf = gdf.loc[gdf['ID'].isin([aoi_id])]
     tile_utm_zone = 'EPSG:326{}'.format(gdf['zone'].values[0][:-1])
     gdf = gdf.to_crs(tile_utm_zone)

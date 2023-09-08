@@ -12,7 +12,7 @@ import rioxarray
 from rioxarray import merge as rioxarray_merge
 
 # DEFINE constants
-INDIA_GRID_SHAPEFILE_PATH = r'resources/india_utm_fishnet.gpkg'
+#INDIA_GRID_SHAPEFILE_PATH = r'resources/india_utm_fishnet.gpkg'
 CATALOG = sign_in()
 
 
@@ -65,7 +65,7 @@ def string_to_date_range(start, end):
     )
 
 # define a function to get bounding box as json from a shapefile using GeoPandas
-def gpd_to_json(id_list, infile=INDIA_GRID_SHAPEFILE_PATH, separate=True, id_key='ID', zone_key='zone'):
+def gpd_to_json(id_list, infile, separate=True, id_key='ID', zone_key='zone'):
     """
     Converts selected polygons from a GeoDataFrame to GeoJSON format.
 
@@ -331,12 +331,12 @@ def export_xarray(xarray_data, filename):
 
 
 # define a function to merge the exported flood extent file using date
-def merge_flood_gdfs(flood_dir):
+def merge_flood_gdfs(flood_dir, date_index=5, delimiter='_'):
     # get the list of files present in the directory
     files_list = glob.glob(f'{flood_dir}/*.gpkg')
 
     # extract unique dates from the flood vector file names
-    unique_dates = [file.split('_')[5][:8] for file in files_list]
+    unique_dates = [os.path.split(file)[-1].split(delimiter)[date_index-1][:8] for file in files_list]
 
     # merge
     gdf_union = pd.concat([
