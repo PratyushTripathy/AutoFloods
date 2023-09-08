@@ -6,16 +6,26 @@ import ifmiap.preprocessing
 import ifmiap.postprocessing
 import ifmiap.mapfloods
 from datetime import datetime
-import os, json
+import os, json, shutil
 import xarray as xr
 from matplotlib import pyplot as plt
 
+__version__ = '2023.9.1'
 DEM_OUTFILE = r'nasadem_aoi_id.nc'
-JSON_OUTFILE = r'resources/.json'
-NC_OUTFILE = f'output/mean_std/aoi_id_vv_vh_mean_std.nc'
-FLOOD_RASTER_OUTFILE = f'output/flood_raster/floodextent_id.tif'
-FLOOD_VECTOR_OUTFILE = f'output/flood_vector/floodextent_id.gpkg'
-FLOOD_MAP_OUTFILE = f'output/flood_image/floodmap_id.png'
+JSON_OUTFILE = r'../resources/.json'
+NC_OUTFILE = f'../output/mean_std/aoi_id_vv_vh_mean_std.nc'
+FLOOD_RASTER_OUTFILE = f'../output/flood_raster/floodextent_id.tif'
+FLOOD_VECTOR_OUTFILE = f'../output/flood_vector/floodextent_id.gpkg'
+FLOOD_MAP_OUTFILE = f'../output/flood_image/floodmap_id.png'
+FOLDERS_TO_CREATE = [
+    r'../output/',
+    r'../output/mean_std',
+    r'../output/flood_raster',
+    r'../output/flood_vector',
+    r'../output/flood_image',
+    r'../output/final_output',
+    r'../resources/dem'
+]
 
 
 # create a class object to bring together all the pieces
@@ -30,7 +40,13 @@ class flood_mapper():
         self.dry_years = range(min(dry_years), max(dry_years)+1)
         self.wet_dates = [utils.string_to_date_range(wet_duration[0], wet_duration[1])]
         self.dem_dir = dem_dir
+        self.create_out_dirs()
         self.generate_defaults()
+
+    def create_out_dirs(self):
+        for folder in FOLDERS_TO_CREATE:
+            if not os.path.exists(folder):
+                os.mkdir(folder)
 
     def generate_defaults(self):
         # this is for searching scenes
@@ -270,14 +286,15 @@ class flood_mapper():
     def generate_mean_std_by_aoi(self):
         # separate and clip the reprojected image for each tile
         reprojected_clipped_dry = {
-            id: preprocessing.reproject_clip_stac(self.s1_dry_dict, self.dry_aoi_scene_dict, id)
+            id: preprocessing.reproject_clip_stac(self.s1_dry_dict, self.dry_aoi_scene_dict,
+                                                  self.grid_shapefile_path, id)
             for id in self.selected_grid_id
             if not id in self.already_processed_aoi_ids
         }
 
         # stack the reprojected and clipped images
         self.stacked_dry = {
-            id: preprocessing.stack_images(reprojected_clipped_dry[id], id)
+            id: preprocessing.stack_images(reprojected_clipped_dry[id], self.grid_shapefile_path, id)
             for id in reprojected_clipped_dry
             }
 
@@ -330,7 +347,8 @@ class flood_mapper():
 
         if len(dem_id_to_process) > 0:
             # download DEM for select IDs
-            bbox_for_dem_download = utils.gpd_to_json(id_list=dem_id_to_process, separate=False, id_key=self.id_key)
+            bbox_for_dem_download = utils.gpd_to_json(id_list=dem_id_to_process, infile=self.grid_shapefile_path,
+                                                      separate=False, id_key=self.id_key)
             dem_merged_xarray = ifmiap.utils.download_nasadem(bbox_for_dem_download[0], overview_level=dem_overview, nodata=nodata)
 
             # for each of the ids, clip dem and export to the .nc file
@@ -339,6 +357,7 @@ class flood_mapper():
                 print(f'DEM for tile ID {id} not found. Downloading...')
                 self.dem[id] = ifmiap.preprocessing.clip_xarray_using_id(
                     data_xarray=dem_merged_xarray,
+                    grid_shapefile_path=self.grid_shapefile_path,
                     aoi_id=id,
                     ref_xarray=self.mean_std_by_aoi[id]
                 )
@@ -366,11 +385,13 @@ class flood_mapper():
                     [
                         ifmiap.preprocessing.clip_xarray_using_id(
                             data_xarray=self.s1_wet_dict[scene_id]['vv_ds'],
+                            grid_shapefile_path=self.grid_shapefile_path,
                             aoi_id=id,
                             ref_xarray=self.mean_std_by_aoi[id]
                         ),
                         ifmiap.preprocessing.clip_xarray_using_id(
                             data_xarray=self.s1_wet_dict[scene_id]['vh_ds'],
+                            grid_shapefile_path=self.grid_shapefile_path,
                             aoi_id=id,
                             ref_xarray=self.mean_std_by_aoi[id]
                         )
@@ -435,6 +456,25 @@ class flood_mapper():
                         outfile_flood=outfile_flood
                     )
 
+    def flush_output(self, remove_dem=False):
+        if remove_dem:
+            folders_to_delete = FOLDERS_TO_CREATE[:]
+        else:
+            folders_to_delete = FOLDERS_TO_CREATE[:-1]
+
+        # add json files to the delete list
+        folders_to_delete = folders_to_delete + [
+            self.dry_aoi_scene_json_file,
+            self.dry_scene_aoi_json_file,
+            self.wet_aoi_scene_json_file,
+            self.wet_scene_aoi_json_file
+        ]
+
+        for folder in folders_to_delete:
+            if os.path.isfile(folder):
+                os.remove(folder)
+            elif os.path.exists(folder):
+                shutil.rmtree(folder, ignore_errors=True)
 
 
 
