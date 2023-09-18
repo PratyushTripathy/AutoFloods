@@ -21,20 +21,19 @@ def date_range(start, days):
     """
     Generate a Date Range
 
-      This function takes a start date and a number of days, and generates a date range
-      that includes the start date and the specified number of days.
+    This function takes a start date and a number of days, and generates a date range
+    that includes the start date and the specified number of days.
 
-    Parameters:
-          start (str): The start date in the format 'dd/mm/yyyy'.
-          days (int): The number of days to generate in the date range.
+    Parameters
+    __________
+    start             : string
+                        The start date in the format 'dd/mm/yyyy'
+    days              : integer
+                        The number of days to generate in the date range.
 
-    Returns:
-          tuple: A tuple containing the minimum and maximum dates in the generated range.
-
-    Example:
-          >>> start_date = '01/08/2023'
-          >>> num_days = 10
-          >>> date_min, date_max = date_range(start_date, num_days)
+    Returns
+    _______
+    tuple             : A tuple containing the minimum and maximum dates in the generated range.
 
     """
     temp_date = pd.date_range(datetime.datetime.strptime(start, '%d/%m/%Y'), periods=days+1, freq='D')
@@ -45,13 +44,21 @@ def date_range(start, days):
 # define a function to format string correctly and create date range
 def string_to_date_range(start, end):
     """
-    Convert Start and End Strings to Date Range
+    Convert String Date Range to Python Date Objects
 
-    Converts start and end date strings to a date range.
+    This function parses start and end date strings in the format 'MM/YYYY' and converts them into Python date objects.
+    It calculates the last day of the end month to form a valid date range.
 
-    :param start: Start date (format 'dd/mm/yyyy').
-    :param end: End date (format 'dd/mm/yyyy').
-    :return: Tuple (start date, end date).
+    Parameters
+    __________
+    start               : string
+                          The start date in 'MM/YYYY' format.
+    end                 : string
+                          The end date in 'MM/YYYY' format.
+
+    Returns
+    _______
+    tuple               : A tuple containing two Python date objects representing the start and end of the date range.
 
     """
     start_year, start_month = start.split('/')
@@ -67,17 +74,32 @@ def string_to_date_range(start, end):
 # define a function to get bounding box as json from a shapefile using GeoPandas
 def gpd_to_json(id_list, infile, separate=True, id_key='ID', zone_key='zone'):
     """
-    Converts selected polygons from a GeoDataFrame to GeoJSON format.
+    Convert GeoPandas DataFrame to GeoJSON.
 
-    This function reads a shapefile using GeoPandas, filters the polygons based on the provided ID list,
-    and then generates GeoJSON representations of the filtered polygons' bounding boxes.
-    :param id_list: A list of IDs to filter the polygons in the GeoDataFrame.
-    :param infile: The path to the input shapefile. Default is INDIA_GRID_SHAPEFILE_PATH.
-    :param separate: If True, each polygon's bounding box will be generated separately in GeoJSON.
-                                  If False, a single bounding box covering all filtered polygons will be generated.
-                                  Default is True.
-    :param id_key: The key representing the ID field in the GeoDataFrame. Default is 'ID'.
-    :return:  list: A list of dictionaries representing GeoJSON polygons.
+    This function converts a GeoPandas DataFrame into GeoJSON format. It can filter the DataFrame by IDs,
+    and optionally, separate the GeoJSON objects by those IDs. If not separated, it creates a single GeoJSON
+    object encompassing all geometries.
+
+    Parameters
+    ----------
+    id_list             : list
+                          A list of IDs to filter the GeoPandas DataFrame.
+
+    infile              : string
+                          The input shapefile path.
+
+    separate            : boolean, optional (default=True)
+                          If True, separates GeoJSON objects by IDs. If False, creates a single GeoJSON object for all geometries.
+
+    id_key              : integer, optional (default='ID')
+                          The key in the GeoPandas DataFrame that corresponds to the ID.
+
+    zone_key            : string, optional (default='zone')
+                          The key in the GeoPandas DataFrame that corresponds to the zone.
+
+    Returns
+    -------
+    list                : A list of GeoJSON objects, one per ID if separated, or a single GeoJSON object if not separated.
 
     """
     # create GeoJSON using the bounds
@@ -140,8 +162,8 @@ def search_sentinel_data(bbox, start_date=None, end_date=None):
     """
     Search for Sentinel-1 data within a specified time range and bounding box of interest.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     bbox              : Dictionary
                         The bounding box of interest in GeoJSON format, specified as a dictionary.
                         
@@ -151,8 +173,8 @@ def search_sentinel_data(bbox, start_date=None, end_date=None):
     end_date          : Datetime object
                         The end date of the time range to search for data.
 
-    Returns:
-    --------
+    Returns
+    -------
     results           : list
                         A list of pystac.Item objects containing the searched Sentinel-1 data.
 
@@ -181,13 +203,14 @@ def s1item_footprint(item):
     """
     Create a GeoDataFrame containing the footprint polygon of a Sentinel-1 item.
 
-    Parameters:
-    -----------
-    item: The Sentinel-1 item containing geometry information
+    Parameters
+    ----------
+    item            : object
+                      The Sentinel-1 item containing geometry information.
 
     Returns
-    _______
-    A GeoDataFrame containing the footprint polygon with the 'ID' and 'geometry' columns.
+    -------
+    GeoDataFrame    :A GeoDataFrame containing the footprint polygon with the 'ID' and 'geometry' columns.
     """
     polygon = Polygon(item.geometry['coordinates'][0])
 
@@ -203,17 +226,17 @@ def seggregate_sentinel_search(aoi_list, search_items):
     this information.
 
     Parameters
-    -----------
-    aoi_list        : A list of AOI polygons in GeoJSON-like format.
-    search_items    : A tuple containing two lists of search items.
-                              The first list is not used in this function.
-                              The second list contains the search items (e.g., Sentinel-1 scenes) to process.
+    ----------
+    aoi_list            : A list of AOI polygons in GeoJSON-like format.
+    search_items        : A tuple containing two lists of search items.
+                          The first list is not used in this function.
+                          The second list contains the search items (e.g., Sentinel-1 scenes) to process.
 
     Returns
     -------
-    tuple           : A tuple containing two dictionaries.
-                      The first dictionary maps AOI IDs to lists of intersecting search item IDs.
-                      The second dictionary maps search item IDs to lists of intersecting AOI IDs.
+    tuple               : A tuple containing two dictionaries.
+                          The first dictionary maps AOI IDs to lists of intersecting search item IDs.
+                          The second dictionary maps search item IDs to lists of intersecting AOI IDs.
     """
     # create GDF from the AOI list
     aoi_footprints = gpd.GeoDataFrame([
@@ -248,6 +271,22 @@ def seggregate_sentinel_search(aoi_list, search_items):
     return aoi_scene_dict, scene_aoi_dict
 
 def query_nasadem(aoi_union_bbox):
+    """
+    Query NASADEM Elevation Data for a Specified Area of Interest (AOI)
+
+    This function queries NASADEM (NASA Shuttle Radar Topography Mission Digital Elevation Model) data for a specific AOI
+    based on the given bounding box coordinates. It searches for NASADEM scenes that intersect with the provided AOI
+    bounding box and have elevation data available.
+
+    Parameters
+    __________
+    aoi_union_bbox          : A list of four float values representing the AOI bounding box in the format [xmin, ymin, xmax, ymax].
+
+    Returns
+    _______
+    list                    : A list of NASADEM scene items that intersect with the AOI bounding box and contain elevation data.
+
+    """
     # search for Sentinel-1 scenes
     results = CATALOG.search(
         collections=["nasadem"],
@@ -262,6 +301,25 @@ def query_nasadem(aoi_union_bbox):
            ]
 
 def download_nasadem(bbox, overview_level=1, nodata=0.0):
+    """
+    Download and Mosaic NASADEM Elevation Data for a Specified Bounding Box
+
+    This function downloads NASADEM (NASA Shuttle Radar Topography Mission Digital Elevation Model) data for a specific
+    bounding box, creates a mosaic of the downloaded scenes, and returns the resulting xarray dataset.
+
+    Parameters
+    __________
+    bbox                        : A list of four float values representing the bounding box coordinates in the format [xmin, ymin, xmax, ymax].
+    overview_level              : integer, optional
+                                  The overview level to use when opening NASADEM scenes (default is 1).
+    nodata                      : float, optional
+                                  The nodata value to use when merging the scenes (default is 0.0).
+
+    Returns
+    _______
+    xarray.Dataset              : A merged and mosaicked xarray dataset containing NASADEM elevation data for the specified bounding box.
+
+    """
     dem_item_list = query_nasadem(bbox)
     dem_xarray_list = [
         rioxarray.open_rasterio(item.assets['elevation'].href, overview_level=overview_level, masked=True)
@@ -283,11 +341,13 @@ def export_xarray(xarray_data, filename):
     Parameters
     ----------
     xarray_data                 : The Xarray dataset or data array to be exported.
-    filename                    : The path and filename of the output GeoTIFF file.
+    filename                    : string
+                                  The path and filename of the output GeoTIFF file.
 
     Raises
-    ______
-    InputDataDimensionError     : Raised when the input data has an unexpected number of dimensions.
+    ------
+    InputDataDimensionError     : Exception
+                                  Raised when the input data has an unexpected number of dimensions.
 
     """
     with rasterio.Env():
@@ -332,6 +392,26 @@ def export_xarray(xarray_data, filename):
 
 # define a function to merge the exported flood extent file using date
 def merge_flood_gdfs(flood_dir, date_index=5, delimiter='_'):
+    """
+    Merge and Dissolve Flood Vector GeoDataFrames
+
+    This function merges and dissolves multiple GeoDataFrame files containing flood extent information. It extracts
+    unique dates from the file names, dissolves the flood extent shapes, and exports tile-wise flood extent files.
+
+    Parameters
+    __________
+    flood_dir              : string
+                             The directory containing GeoPackage files with flood extent data.
+    date_index             : integer, optional (default is 5)
+                             The index of the date in the filename.
+    delimiter              : string, optional (default is '_')
+                             The delimiter used in the filenames.
+
+    Returns
+    _______
+    None
+
+    """
     # get the list of files present in the directory
     files_list = glob.glob(f'{flood_dir}/*.gpkg')
 

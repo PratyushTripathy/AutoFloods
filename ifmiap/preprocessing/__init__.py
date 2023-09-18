@@ -17,12 +17,14 @@ def read_sentinel1_stac(stac_item, overview_level=3):
 
     Parameters
     __________
-    stac_item (dict)                : A STAC Item containing metadata and asset information.
-    overview_level (int, optional)  : The level of overviews to use for reading the data. Default is 3.
+    stac_item                 : dictionary
+                                A STAC Item containing metadata and asset information.
+    overview_level            : integer, optional
+                                The level of overviews to use for reading the data. Default is 3.
 
     Returns
     _______
-    tuple: A tuple containing the STAC Item ID and a dictionary of reprojected DataArrays.
+    tuple                     : A tuple containing the STAC Item ID and a dictionary of reprojected DataArrays.
 
     """
     # get the URL to the VV and VH bands
@@ -55,13 +57,14 @@ def reproject_clip_stac(reprojected_dict, aoi_scene_dict, grid_shapefile_path, i
 
     Parameters
     __________
-    reprojected_dict (dict)     : A dictionary containing reprojected DataArrays with scene IDs as keys.
-    aoi_scene_dict (dict)       : A dictionary mapping AOI IDs to lists of scene IDs.
-    id (str)                    : The AOI ID for which clipping should be performed.
+    reprojected_dict          : A dictionary containing reprojected DataArrays with scene IDs as keys.
+    aoi_scene_dict            : A dictionary mapping AOI IDs to lists of scene IDs.
+    id                        : integer
+                                The AOI ID for which clipping should be performed.
 
     Returns
     _______
-    dict: A dictionary containing clipped DataArrays for the specified AOI ID and scene IDs.
+    dict                      : A dictionary containing clipped DataArrays for the specified AOI ID and scene IDs.
 
     """
     # read the shapefile and filter it to use for clipping
@@ -93,12 +96,15 @@ def stack_images(clipped_dict, grid_shapefile_path, id):
 
     Parameters
     __________
-    clipped_dict (dict)     : A dictionary containing clipped DataArrays for different scenes.
-    id (str)                : The AOI ID for which stacking should be performed.
+    clipped_dict             : A dictionary containing clipped DataArrays for different scenes.
+    grid_shapefile_path      : string
+                               The path to the shapefile used for clipping.
+    id                       : integer
+                               The AOI ID for which stacking should be performed.
 
     Returns
     _______
-    dict                    : A dictionary containing multi-band stacked DataArrays for both VV and VH bands.
+    dict                     : A dictionary containing multi-band stacked DataArrays for both VV and VH bands.
 
     """
     # create a list of dictionaries containing 'vv_ds' and 'vh_ds'
@@ -136,6 +142,28 @@ def stack_images(clipped_dict, grid_shapefile_path, id):
     }
 
 def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray):
+    """
+    Clip and Resample DataArray to a Specified Extent and Resolution
+
+    This function takes a DataArray, a grid shapefile, an area of interest (AOI) ID, and a reference DataArray
+    to clip and resample the input DataArray to match the extent and resolution of the reference DataArray.
+
+    Parameters:
+    __________
+    data_xarray                 : xarray.DataArray
+                                  The input xarray dataset to be clipped and resampled.
+    grid_shapefile_path         : string
+                                  The path to the grid shapefile containing AOI information.
+    aoi_id                      : integer
+                                  The ID of the Area of Interest (AOI) to be used for clipping and resampling.
+    ref_xarray                  : xarray.DataArray
+                                  The reference xarray dataset providing spatial information.
+
+    Returns:
+    _______
+    xarray.DataArray            : A clipped and resampled xarray dataset matching the extent and resolution of the specified AOI.
+
+    """
     cell_size = float(ref_xarray.spatial_ref.GeoTransform.split(' ')[1])
 
     # extract target extent from the grid polygon

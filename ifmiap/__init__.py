@@ -49,6 +49,11 @@ class flood_mapper():
                 os.mkdir(folder)
 
     def generate_defaults(self):
+        """
+        Generate Default Values and Filenames
+
+        This method initializes and generates default values and filenames for various parameters used in the process.
+        """
         # this is for searching scenes
         self.aoi_union = utils.gpd_to_json(id_list=self.selected_grid_id, infile=self.grid_shapefile_path,
                                            separate=False, id_key=self.id_key)
@@ -88,8 +93,15 @@ class flood_mapper():
 
     def get_dry_dates(self):
         """
-        This method extract dry months from the attributes of the shapefile.
-        Returns:
+        Extract Dry Months from the Grid Shapefile Attributes.
+
+        This method reads a shapefile containing grid information, filters it based on selected grid IDs, and extracts
+        dry months from the specified column in the shapefile. It stores the dry months in a dictionary format where
+        grid IDs are keys and dry months are values.
+
+        Returns
+        -------
+        None
 
         """
 
@@ -118,19 +130,15 @@ class flood_mapper():
 
     def generate_dry_date_ranges(self):
         """
-        This method generates a list of date ranges in a well formatted way for next steps.
+        Generate Date Ranges for the Dry Season.
 
-        This method runs under the assumption that the dry date across the given
-        list of IDs of the grid polygons are the same. If the months are different,
-        the earlier and latest month of all grid polygons will be used as the dry
-        duration.
-        Args:
-            years:
+        This method generates date ranges for the dry season based on the provided dry months and years.
 
-        Returns:
+        Returns
+        -------
+        None
 
         """
-
         month_start = min([
             item
             for list_item in self.dry_months.values()
@@ -151,6 +159,24 @@ class flood_mapper():
             ]
 
     def get_s1_items(self, dry_wet='dry', verbose=False):
+        """
+        Retrieve Sentinel-1 Items for Dry or Wet Seasons.
+
+        This method retrieves Sentinel-1 scene items for either the dry or wet seasons based on the specified parameter.
+
+        Parameters
+        ----------
+        dry_wet             : string, optional (default is 'dry')
+                              Specify either 'dry' or 'wet' to retrieve items for the dry or wet season.
+
+        verbose             : boolean, optional (default is False)
+                              Whether to display verbose output.
+
+        Returns
+        -------
+        None
+
+        """
         if dry_wet == 'dry':
             dates = self.dry_dates
         elif dry_wet == 'wet':
@@ -181,7 +207,26 @@ class flood_mapper():
         # generate scene_aoi dictionaries
         self.generate_scene_aoi_dict(dry_wet=dry_wet, verbose=verbose)
 
+
     def generate_scene_aoi_dict(self, dry_wet='dry', verbose=False):
+        """
+        Generate Scene-AOI Dictionaries and Export to JSON Files.
+
+        This method generates dictionaries that map scenes to AOIs and AOIs to scenes, then exports them to JSON files.
+
+        Parameters
+        ----------
+        dry_wet                : string, optional (default is 'dry')
+                                 Specify either 'dry' or 'wet' to generate dictionaries for the dry or wet season.
+
+        verbose                : boolean, optional (default is False)
+                                 Whether to display verbose output.
+
+        Returns
+        -------
+        None
+
+        """
         if dry_wet == 'dry':
             aoi_scene_dict, scene_aoi_dict = utils.seggregate_sentinel_search(
                 self.aoi_list, self.dry_s1_scenes
@@ -197,8 +242,8 @@ class flood_mapper():
             aoi_scene_json_file = self.wet_aoi_scene_json_file
             scene_aoi_json_file = self.wet_scene_aoi_json_file
 
-        # export both aoi_scene and scene_aoi dictionaries
-        ## neatly hand and export aoi_scene_json first
+            # export both aoi_scene and scene_aoi dictionaries
+            ## neatly hand and export aoi_scene_json first
         skipped_ids = list()
         final_json_data = aoi_scene_dict
         if os.path.exists(aoi_scene_json_file):
@@ -251,7 +296,6 @@ class flood_mapper():
             )
             f.write('\n')
 
-
         if verbose == True:
             for id in self.selected_grid_id:
                 print(
@@ -266,6 +310,24 @@ class flood_mapper():
             self.wet_skipped_ids = skipped_ids
 
     def read_scenes(self, dry_wet='dry', overview_level=3):
+        """
+        Read and Reproject Sentinel-1 Scenes
+
+        This method reads and reprojects Sentinel-1 scenes for either the dry or wet season, and stores them in a dictionary.
+
+        Parameters
+        ----------
+        dry_wet                 : string, optional (default is 'dry')
+                                  Specify either 'dry' or 'wet' to read scenes for the dry or wet season.
+
+        overview_level          : integer, optional (default is 3)
+                                  The overview level for reading.
+
+        Returns
+        _______
+        None
+
+        """
         if dry_wet == 'dry':
             s1_scenes = self.dry_s1_scenes
         elif dry_wet == 'wet':
@@ -284,6 +346,21 @@ class flood_mapper():
             self.s1_wet_dict = s1_combined
 
     def generate_mean_std_by_aoi(self):
+        """
+        Generate Mean and Standard Deviation by AOI
+
+        This method separates, clips, stacks, and calculates cell-level mean and standard deviation for Sentinel-1 scenes
+        for each Area of Interest (AOI). The results are saved to separate files and loaded into the object.
+
+        Parameters
+        __________
+        None
+
+        Returns
+        _______
+        None
+
+        """
         # separate and clip the reprojected image for each tile
         reprojected_clipped_dry = {
             id: preprocessing.reproject_clip_stac(self.s1_dry_dict, self.dry_aoi_scene_dict,
@@ -322,6 +399,21 @@ class flood_mapper():
         self.load_mean_std_by_aoi()
 
     def load_mean_std_by_aoi(self):
+        """
+        Load Mean and Standard Deviation by AOI
+
+        This method loads previously computed mean and standard deviation by Area of Interest (AOI) from NetCDF files and
+        stores them in the 'mean_std_by_aoi' attribute. If the data for an AOI is missing, it prints a message.
+
+        Parameters:
+        __________
+        None
+
+        Returns:
+        _______
+        None
+
+        """
         if not hasattr(self, 'mean_std_by_aoi'):
             self.mean_std_by_aoi = dict()
 
@@ -337,6 +429,26 @@ class flood_mapper():
                     print(f'{infile} present in JSON as processed but .nc file is missing.')
 
     def prepare_dem(self, dem_overview=1, nodata=0.0):
+        """
+        Prepare Digital Elevation Model (DEM)
+
+        This method prepares the Digital Elevation Model (DEM) data for selected grid IDs. It checks if the DEM data for a
+        specific grid ID exists, and if not, it downloads and clips the DEM. The resulting DEM data is stored in the 'dem'
+        attribute.
+
+        Parameters
+        __________
+        dem_overview    : integer, optional (default is 1)
+                          The overview level for DEM download.
+
+        nodata          : float, optional (default is 0.0)
+                          The nodata value to be used in the DEM.
+
+        Returns
+        _______
+        None
+
+        """
         dem_id_to_process = [
             id
             for id in self.selected_grid_id
@@ -374,6 +486,22 @@ class flood_mapper():
                 }
 
     def prepare_wet_scenes(self, overview_level=3):
+        """
+        Prepare Wet Period Sentinel-1 Scenes.
+
+        This method prepares Sentinel-1 scenes for the wet period. It retrieves the relevant scenes, reads them,
+        and clips them for each selected grid ID. The resulting wet scenes are stored in the 'wet_scenes_by_aoi' attribute.
+
+        Parameters
+        ----------
+        overview_level     : integer, optional (default is 3)
+                              The overview level for reading wet scenes.
+
+        Returns
+        -------
+        None
+
+        """
         # call the previouisly defined method to get S1 scenes for the wet period
         self.get_s1_items(dry_wet='wet')
         self.read_scenes(dry_wet='wet', overview_level=overview_level)
@@ -404,6 +532,33 @@ class flood_mapper():
         }
 
     def map_floods(self, vv_thd=2.5, vh_thd=2.5, dem_thd=600, slp_thd=25, export_raster=False, export_vector=False, export_maps=False):
+        """
+        Map Floods
+
+        This method maps flood extents based on specified thresholds and exports the results as rasters, vectors, or images.
+
+        Parameters:
+        __________
+        vv_thd               : float
+                               Threshold for anomaly detection in the VV band .
+        vh_thd               : float
+                               Threshold for anomaly detection in the VH band (default is 2.5).
+        dem_thd              : float
+                               Threshold for elevation in meters (default is 600).
+        slp_thd              : float
+                               Threshold for slope in degrees (default is 25).
+        export_raster        : boolean, optional (default is False)
+                               Whether to export flood extents as raster images .
+        export_vector        : boolean, optional (default is False)
+                               Whether to export flood extents as vector files .
+        export_maps          : boolean, optional (default is False)
+                               Whether to export flood maps as images.
+
+        Returns:
+        _______
+        None
+
+        """
         self.flood_dict = mapfloods.map_floods(
             mean_std_by_aoi=self.mean_std_by_aoi,
             wet_scenes_by_aoi=self.wet_scenes_by_aoi,
@@ -457,6 +612,21 @@ class flood_mapper():
                     )
 
     def flush_output(self, remove_dem=False):
+        """
+        Flush Output
+
+        This method removes specified output folders and files, including JSON files used for scene and AOI processing.
+
+        Parameters:
+        __________
+        remove_dem      : boolean, optional (default is False)
+                          Whether to remove the DEM data folder.
+
+        Returns:
+        _______
+        None
+
+        """
         if remove_dem:
             folders_to_delete = FOLDERS_TO_CREATE[:]
         else:

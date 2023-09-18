@@ -18,11 +18,12 @@ def polygonize_flood_raster(flood_data):
 
     Parameters
     __________
-    flood_data (xarray.DataArray)       : A DataArray containing raster flood data.
+    flood_data                  : xarray.DataArray
+                                  A DataArray containing raster flood data.
 
     Returns
     _______
-    geopandas.GeoDataFrame              : A GeoDataFrame containing polygons representing flooded areas.
+    geopandas.GeoDataFrame      : A GeoDataFrame containing polygons representing flooded areas.
 
     """
     data = flood_data.astype('uint8')

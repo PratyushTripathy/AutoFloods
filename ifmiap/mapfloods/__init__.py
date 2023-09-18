@@ -18,14 +18,19 @@ def map_anomaly_cells(pre_xarray, post_xarray, vv_thd, vh_thd):
 
     Parameters
     __________
-    pre_stack (dict)        : A dictionary containing multi-band stacked pre-flood DataArrays for VV and VH bands.
-    post_stack (dict)       : A dictionary containing multi-band stacked post-flood DataArrays for VV and VH bands.
-    vv_thd (float)          : Threshold for anomaly detection in the VV band.
-    vh_thd (float)          : Threshold for anomaly detection in the VH band.
+    pre_stack               : xarray.Dataset
+                              A dictionary containing multi-band stacked pre-flood DataArrays for VV and VH bands.
+    post_stack              : xarray.Dataset
+                              A dictionary containing multi-band stacked post-flood DataArrays for VV and VH bands.
+    vv_thd                  : float
+                              Threshold for anomaly detection in the VV band.
+    vh_thd                  : float
+                              Threshold for anomaly detection in the VH band.
 
     Returns
     _______
-    xarray.DataArray        : A DataArray indicating combined anomaly and flood cells.
+    xarray.DataArray        : xarray.DataArray
+                              A DataArray indicating combined anomaly and flood cells.
 
     """
     # calculate anomaly and flood cells for VV band
@@ -53,6 +58,33 @@ def map_anomaly_cells(pre_xarray, post_xarray, vv_thd, vh_thd):
 
 # define a function to map floods (identify anomaly cells and perform slope and elevaation mask)
 def map_floods(mean_std_by_aoi, wet_scenes_by_aoi, dem_path, vv_thd, vh_thd, dem_thd, slp_thd):
+    """
+    Map Flood Anomalies within Areas of Interest (AOIs)
+
+    This function takes statistical data and multi-scene wetness information within Areas of Interest (AOIs),
+    along with elevation and slope thresholds, to map flood anomalies. It generates a dictionary containing
+    flood anomaly maps for each AOI and scene.
+
+    Parameters
+    __________
+    mean_std_by_aoi         : A dictionary mapping AOI IDs to mean and standard deviation data.
+    wet_scenes_by_aoi       : A dictionary mapping AOI IDs to scenes with wetness information.
+    dem_path                : string
+                              Path to the digital elevation model (DEM) data.
+    vv_thd                  : float
+                              Threshold value for VV (Vertical-Vertical) polarization.
+    vh_thd                  : float
+                              Threshold value for VH (Vertical-Horizontal) polarization.
+    dem_thd                 : float
+                              Threshold value for the DEM.
+    slp_thd                 : float
+                              Threshold value for the slope.
+
+    Returns
+    _______
+    dict                    : A nested dictionary containing flood anomaly maps for each AOI and scene.
+
+    """
     # generate id and scene wise anomaly cells
     anomaly_dict = {
         id: {
@@ -77,6 +109,23 @@ def map_floods(mean_std_by_aoi, wet_scenes_by_aoi, dem_path, vv_thd, vh_thd, dem
 
 # define a function to export flood maps as images
 def flood_images(flood_xarray, outfile_flood):
+    """
+    Export Flood Raster Image
+
+    This function takes a flood xarray dataset and exports an image representing the flood raster data. It calculates
+    the image's extent, creates a plot, and saves the image to a file.
+
+    Parameters
+    __________
+    flood_xarray              : An xarray dataset containing flood raster data.
+    outfile_flood             : string
+                                The path and filename for the exported flood image.
+
+    Returns
+    _______
+    None
+
+    """
     x_min = flood_xarray.x.min()
     y_min = flood_xarray.y.min()
     x_max = flood_xarray.x.max()
