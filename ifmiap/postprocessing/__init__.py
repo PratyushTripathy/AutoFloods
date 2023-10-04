@@ -7,6 +7,7 @@ from shapely.geometry import shape
 import geopandas as gpd
 from shapely.geometry import box
 import pandas as pd
+import numpy as np
 
 # define a function to polygonize the flood raster
 def polygonize_flood_raster(flood_data):
@@ -73,6 +74,36 @@ def polygonize_flood_raster(flood_data):
     #gdf['geometry'] = gdf['geometry'].scale(xfact=1, yfact=-1, origin=center_top_point)
 
     return gdf
+
+def flood_duration_count(stacked_flood_data):
+    max_durations = np.zeros_like(stacked_flood_data[0, :, :], dtype=int)
+    unique_event_counts = np.zeros_like(stacked_flood_data[0, :, :], dtype=int)
+
+    for x in range(stacked_flood_data.shape[1]):
+        for y in range(stacked_flood_data.shape[2]):
+            flood_data = stacked_flood_data[:, x, y]
+            max_duration = 0
+            current_duration = 0
+            current_event = 0
+            unique_event_count = 0
+
+            for is_flooding in flood_data:
+                is_flooding = int(is_flooding)  # Ensure it's treated as an integer
+                current_duration = current_duration + 1 if is_flooding else 0
+                if current_duration > max_duration:
+                    max_duration = current_duration
+
+                if is_flooding:
+                    if current_event == 0:
+                        unique_event_count += 1
+                    current_event = 1
+                else:
+                    current_event = 0
+
+            max_durations[x, y] = max_duration
+            unique_event_counts[x, y] = unique_event_count
+
+    return max_durations, unique_event_counts
 
 
 

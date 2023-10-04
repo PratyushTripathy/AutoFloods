@@ -17,6 +17,8 @@ NC_OUTFILE = f'../output/mean_std/aoi_id_vv_vh_mean_std.nc'
 FLOOD_RASTER_OUTFILE = f'../output/flood_raster/floodextent_id.tif'
 FLOOD_VECTOR_OUTFILE = f'../output/flood_vector/floodextent_id.gpkg'
 FLOOD_MAP_OUTFILE = f'../output/flood_image/floodmap_id.png'
+FLOOD_DURATION_RASTER_OUTFILE = f'../output/flood_duration_raster/floodduration_id.tif'
+FLOOD_COUNT_RASTER_OUTFILE = f'../output/flood_count_raster/floodcount_id.tif'
 FOLDERS_TO_CREATE = [
     r'../output/',
     r'../output/mean_std',
@@ -24,6 +26,8 @@ FOLDERS_TO_CREATE = [
     r'../output/flood_vector',
     r'../output/flood_image',
     r'../output/final_output',
+    r'../output/flood_duration_raster',
+    r'../output/flood_count_raster',
     r'../resources/dem'
 ]
 
@@ -455,6 +459,30 @@ class flood_mapper():
                         flood_xarray=self.flood_dict[id][scene_id],
                         outfile_flood=outfile_flood
                     )
+
+    def get_duration_count(self, export_raster=False):
+        self.flood_max_duration_dict = dict()
+        self.unique_flood_events_count_dict = dict()
+
+        for id in self.flood_dict:
+            flood_3d = ifmiap.utils.flood_data_3dstack(self.flood_dict[id])
+            max_durations, unique_event_counts = ifmiap.postprocessing.flood_duration_count(flood_3d)
+
+            self.flood_max_duration_dict[id] = utils.numpy_to_xarray(max_durations, list(self.flood_dict[id].values())[0])
+            self.unique_flood_events_count_dict[id] = utils.numpy_to_xarray(unique_event_counts, list(self.flood_dict[id].values())[0])
+
+        # export the flood rasters
+        dry_year_begin = min(self.dry_years)
+        dry_year_end = max(self.dry_years)
+        if export_raster == True:
+            for id in self.flood_max_duration_dict:
+                outfile_duration = FLOOD_DURATION_RASTER_OUTFILE.replace('_id.tif',
+                                                                         f'_{dry_year_begin}_{dry_year_end}_{id}.tif')
+                outfile_count = FLOOD_COUNT_RASTER_OUTFILE.replace('_id.tif',
+                                                                         f'_{dry_year_begin}_{dry_year_end}_{id}.tif')
+
+                ifmiap.utils.export_xarray(self.flood_max_duration_dict[id], outfile_duration)
+                ifmiap.utils.export_xarray(self.unique_flood_events_count_dict[id], outfile_count)
 
     def flush_output(self, remove_dem=False):
         if remove_dem:

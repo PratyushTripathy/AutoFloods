@@ -4,9 +4,9 @@ import glob
 
 
 # create a dictionary that contains input file names by date
-files_list = glob.glob(r'../../stacked_flood_sample/*.tif')
+files_list = glob.glob(r'../output/flood_raster/*.tif')
 files_dict = {
-    int(file.split('_')[-1][:8]): file
+    int(file.split('_')[-5][:8]): file
     for file in files_list
 }
 
@@ -67,5 +67,5 @@ max_duration, unique_event_count = analyze_flood_data_3d(flood_data_3d)
 
 # read dummy data for template
 ds, _ = raster.read(files_list[0])
-raster.export(max_duration, ds, r'../../stacked_flood_sample/max_duration.tif', compress='deflate')
-raster.export(unique_event_count, ds, r'../../stacked_flood_sample/unique_event_count.tif', compress='deflate')
+raster.export(max_duration, ds, r'../output//max_duration.tif', compress='deflate')
+raster.export(unique_event_count, ds, r'../output/unique_event_count.tif', compress='deflate')

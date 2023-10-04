@@ -3,6 +3,7 @@
 # import required libraries
 import datetime, glob, os
 import pandas as pd
+import numpy as np
 import geopandas as gpd
 from ..authenticate import sign_in
 import rasterio
@@ -10,6 +11,8 @@ import numpy as np
 from shapely.geometry import Polygon
 import rioxarray
 from rioxarray import merge as rioxarray_merge
+import numpy as np
+import xarray as xr
 
 # DEFINE constants
 #INDIA_GRID_SHAPEFILE_PATH = r'resources/india_utm_fishnet.gpkg'
@@ -330,6 +333,61 @@ def export_xarray(xarray_data, filename):
                 raise('InputDataDimensionError: Unexpected number of dimensions found in the input data.')
 
 
+# define a function to convert numpy array to xarray object using a reference xarray object
+def numpy_to_xarray(numpy_data, ref_xarray):
+    """
+    Create an xarray DataArray from a NumPy array using coordinates and geospatial information from a reference xarray object.
+    If the input NumPy array is 3D, bands are added to the xarray object with names 'Band1', 'Band2', and so on.
+
+    Parameters
+    ----------
+    numpy_data : numpy.ndarray
+        The NumPy array to be converted to an xarray DataArray.
+    ref_xarray : xarray.DataArray
+        The reference xarray object containing geospatial information.
+
+    Returns
+    -------
+    xarray.DataArray
+        An xarray DataArray created from the NumPy array with coordinates and geospatial information aligned with the reference xarray.
+
+    Raises
+    ------
+    ValueError
+        If the spatial dimensions of the input NumPy array do not match the dimensions of the reference xarray object.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import xarray as xr
+    >>> import rioxarray
+    >>> # Assuming numpy_data is your NumPy array and ref_xarray is your reference xarray object
+    >>> xarray_data = numpy_to_xarray(numpy_data, ref_xarray)
+    """
+
+    # Validate spatial dimensions
+    if len(numpy_data.shape) not in [2, 3]:
+        raise ValueError("Input NumPy array must be 2D or 3D.")
+
+    # Get the geospatial information from the reference xarray object
+    transform = ref_xarray.rio.transform()
+    crs = ref_xarray.rio.crs
+
+    # Create band names for 3D NumPy array
+    band_names = [f'Band{i+1}' for i in range(numpy_data.shape[0])] if len(numpy_data.shape) == 3 else None
+
+    # Create an xarray DataArray with geospatial information and bands using rioxarray
+    if band_names:
+        xarray_data = xr.DataArray(data=numpy_data, dims=['band', *ref_xarray.dims], coords={'band': band_names, **ref_xarray.coords}, attrs=ref_xarray.attrs)
+    else:
+        xarray_data = xr.DataArray(data=numpy_data, dims=ref_xarray.dims, coords=ref_xarray.coords, attrs=ref_xarray.attrs)
+
+    xarray_data.rio.write_crs(crs)
+    xarray_data.rio.write_transform(transform)
+
+    return xarray_data
+
+
 # define a function to merge the exported flood extent file using date
 def merge_flood_gdfs(flood_dir, date_index=5, delimiter='_'):
     # get the list of files present in the directory
@@ -364,3 +422,73 @@ def merge_flood_gdfs(flood_dir, date_index=5, delimiter='_'):
 
         temp_gdf.to_file(outfile)
 
+
+
+def combine_flood_dates(flood_data, date_index=-5):
+    data_dict = None
+
+    # the input flood data can either be a dictionary of xarray objects
+    if type(flood_data) == type(dict()):
+        unique_dates = sorted(set(
+            [
+                key.split('_')[date_index][:8]
+                for key in flood_data
+                ]
+        ))
+
+        data_dict = {
+            u_date: np.maximum.reduce([
+                flood_data[key].to_numpy()
+                for key in flood_data
+                if key.split('_')[date_index][:8] == u_date
+            ])
+            for u_date in unique_dates
+        }
+
+        return data_dict
+
+    # or it can be a list of paths to geotiff files
+    elif type(flood_data) == type(list()):
+        unique_dates = sorted(set(
+            [
+                file.split('_')[date_index][:8]
+                for file in flood_data
+                ]
+        ))
+
+        data_dict = {
+            key: np.maximum.reduce([
+                rasterio.open(filepath).read(1)
+                for filepath in flood_data
+                if filepath.split('_')[date_index][:8] == key
+            ])
+            for key in unique_dates
+        }
+
+        return data_dict
+
+    else:
+        raise TypeError("Only dictionary containing xarray objects or list containing .tif file paths are supported.")
+
+
+def flood_data_3dstack(flood_data, date_index=-5):
+    """
+    This function works under the assumption that input flood data belongs to the same tile.
+
+    Args:
+        flood_data: dict or list
+
+        date_index: integer
+
+    Returns:
+
+    """
+    # call the function that neatly combines flood maps for different dates
+    data_dict = combine_flood_dates(flood_data, date_index=date_index)
+
+    # for now let's say every non-zero cell is flood
+    # stack all of them in a 3D array with cell value as date
+    return np.stack([
+        (data_dict[key] > 0).astype(int)
+        for key in data_dict
+        ])
