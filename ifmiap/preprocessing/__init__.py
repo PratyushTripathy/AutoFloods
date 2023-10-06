@@ -5,6 +5,9 @@ import rioxarray
 import geopandas as gpd
 import xarray as xr
 import numpy as np
+import xrspatial
+from sklearn.feature_extraction import image
+from copy import deepcopy
 
 
 # define a function to reproject VV and VH tif files from the cloud and store all images in memory
@@ -135,7 +138,7 @@ def stack_images(clipped_dict, grid_shapefile_path, id):
         'vh_stack': vh_stack
     }
 
-def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray):
+def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray, buffer=None):
     cell_size = float(ref_xarray.spatial_ref.GeoTransform.split(' ')[1])
 
     # extract target extent from the grid polygon
@@ -143,6 +146,11 @@ def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray):
     gdf = gdf.loc[gdf['ID'].isin([aoi_id])]
     tile_utm_zone = 'EPSG:326{}'.format(gdf['zone'].values[0][:-1])
     gdf = gdf.to_crs(tile_utm_zone)
+
+    # perform buffer if required (for relative slope that uses kernel)
+    if buffer:
+        gdf['geometry'] = gdf.buffer(buffer)
+
     x_min, y_min, x_max, y_max = gdf.total_bounds #ref_xarray.rio.bounds()
 
     # Resample dem DataArray to the common extent and resolution
@@ -150,6 +158,38 @@ def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray):
         x=np.arange(x_min, x_max, cell_size),
         y=np.arange(y_max, y_min, -cell_size)
     )
+
+# define a function to calculate relative slope
+def calculate_relative_slope(dem_xarray, grid_shapefile_path, aoi_id, ref_xarray, buffer=None, nodata=0):
+    # clip the dem to the buffered GDF
+    dem_xarray_clipped = clip_xarray_using_id(
+        data_xarray=dem_xarray,
+        grid_shapefile_path=grid_shapefile_path,
+        aoi_id=aoi_id,
+        ref_xarray=ref_xarray,
+        buffer=buffer
+    )
+
+    # calculate the slope
+    slope_xarray = xrspatial.slope(dem_xarray_clipped.squeeze())
+
+    # run a kernel to calculate relative slope
+    y_size = x_size = buffer * 2 // 30
+    slope_chips = deepcopy(slope_xarray.fillna(nodata))
+    slope_chips = np.pad(slope_chips, (int(y_size / 2), int(x_size / 2)), 'reflect')
+    slope_chips = image.extract_patches_2d(slope_chips, (y_size, x_size))
+
+    slope_min = slope_chips.min(axis=1).min(axis=1).reshape(slope_xarray.shape)
+    slope_max = slope_chips.max(axis=1).max(axis=1).reshape(slope_xarray.shape)
+    slope_relative = slope_max - slope_min
+
+    return xr.DataArray(
+        slope_relative,
+        dims=slope_xarray.dims,
+        coords=slope_xarray.coords
+    )
+
+
 
 
 

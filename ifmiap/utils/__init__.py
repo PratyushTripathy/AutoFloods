@@ -68,7 +68,7 @@ def string_to_date_range(start, end):
     )
 
 # define a function to get bounding box as json from a shapefile using GeoPandas
-def gpd_to_json(id_list, infile, separate=True, id_key='ID', zone_key='zone'):
+def gpd_to_json(id_list, infile, separate=True, id_key='ID', zone_key='zone', buffer=None):
     """
     Converts selected polygons from a GeoDataFrame to GeoJSON format.
 
@@ -101,6 +101,13 @@ def gpd_to_json(id_list, infile, separate=True, id_key='ID', zone_key='zone'):
     
     # filter using the given ID list
     gdf = gdf.loc[gdf[id_key].isin(id_list)]
+
+    # if buffer parameter is passed, reproject to local, then buffer and preproject back to wgs84
+    # this is the case only for downloading DEM because we need slope for a slightly bigger region to run kernel
+    if buffer:
+        tile_utm_zone = 'EPSG:326{}'.format(gdf['zone'].values[0][:-1])
+        gdf = gdf.to_crs(tile_utm_zone)
+        gdf['geometry'] = gdf.buffer(buffer).to_crs('EPSG:4326')
     
     # extract bounding box of each of the filtered polygons
     if separate == True:
@@ -276,7 +283,7 @@ def download_nasadem(bbox, overview_level=1, nodata=0.0):
     return mosaic_xarray
 
 # define a function to export xarray.DataArray object to TIFF file
-def export_xarray(xarray_data, filename):
+def export_xarray(xarray_data, filename, bandnames=None):
     """
     Export Xarray data as a GeoTIFF file.
 
@@ -331,6 +338,10 @@ def export_xarray(xarray_data, filename):
                     dst.write(xarray_data.data[band, :, :], band+1)
             else:
                 raise('InputDataDimensionError: Unexpected number of dimensions found in the input data.')
+
+            if bandnames:
+                for n, item in enumerate(bandnames):
+                    dst.set_band_description(n+1, item)
 
 
 # define a function to convert numpy array to xarray object using a reference xarray object
@@ -486,9 +497,10 @@ def flood_data_3dstack(flood_data, date_index=-5):
     # call the function that neatly combines flood maps for different dates
     data_dict = combine_flood_dates(flood_data, date_index=date_index)
 
+
     # for now let's say every non-zero cell is flood
     # stack all of them in a 3D array with cell value as date
-    return np.stack([
-        (data_dict[key] > 0).astype(int)
+    return list(data_dict.keys()), np.stack([
+        data_dict[key]
         for key in data_dict
         ])
