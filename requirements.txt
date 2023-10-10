@@ -9,3 +9,5 @@ matplotlib==3.5.3
 xarray-spatial==0.3.7
 pystac==1.7.2
 pystac-client==0.6.1
+scikit-image==0.19.3
+scikit-learn==1.1.2

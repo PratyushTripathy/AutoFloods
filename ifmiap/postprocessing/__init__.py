@@ -1,12 +1,9 @@
 # ifmiap/postprocessing/__init__.py
 
 # import required libraries
-import rioxarray
 import rasterio.features
 from shapely.geometry import shape
 import geopandas as gpd
-from shapely.geometry import box
-import pandas as pd
 import numpy as np
 
 # define a function to polygonize the flood raster

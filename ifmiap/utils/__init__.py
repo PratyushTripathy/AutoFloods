@@ -3,11 +3,9 @@
 # import required libraries
 import datetime, glob, os
 import pandas as pd
-import numpy as np
 import geopandas as gpd
 from ..authenticate import sign_in
 import rasterio
-import numpy as np
 from shapely.geometry import Polygon
 import rioxarray
 from rioxarray import merge as rioxarray_merge

@@ -2,7 +2,6 @@
 import os
 import xarray as xr
 import matplotlib.pyplot as plt
-import xrspatial
 
 # switch off displaying maps
 plt.ioff()
