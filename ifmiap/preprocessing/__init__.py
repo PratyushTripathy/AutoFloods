@@ -8,6 +8,8 @@ import numpy as np
 import xrspatial
 from sklearn.feature_extraction import image
 from copy import deepcopy
+from ..utils import decibel_to_linear
+import math
 
 
 # define a function to reproject VV and VH tif files from the cloud and store all images in memory
@@ -36,15 +38,17 @@ def read_sentinel1_stac(stac_item, overview_level=3):
     vv_ds = rioxarray.open_rasterio(vv_href, overview_level=overview_level, masked=True)
     vh_ds = rioxarray.open_rasterio(vh_href, overview_level=overview_level, masked=True)
 
-    # reproject the VV and VH bands
-    #utm_crs = vv_ds.rio.estimate_utm_crs().to_string()
-    #vv_ds = vv_ds.rio.reproject(utm_crs)
-    #vh_ds = vh_ds.rio.reproject(utm_crs)
-    #utm_crs = vv_ds.rio.estimate_utm_crs().to_string()
+    # convert decibel ot linear
+    vv_ds = decibel_to_linear(vv_ds)
+    vh_ds = decibel_to_linear(vh_ds)
+
+    # reproject data
+    vv_ds = vv_ds.rio.reproject('EPSG:4326')
+    vh_ds = vh_ds.rio.reproject('EPSG:4326')
 
     return stac_item.id, {
-        'vv_ds': vv_ds.rio.reproject('EPSG:4326'),#.rio.reproject(utm_crs),
-        'vh_ds': vh_ds.rio.reproject('EPSG:4326')#.rio.reproject(utm_crs)
+        'vv_ds': vv_ds,
+        'vh_ds': vh_ds
     }
 
 # define a function to clip the reprojected data to the given polygon extent
@@ -147,7 +151,7 @@ def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray, b
     tile_utm_zone = 'EPSG:326{}'.format(gdf['zone'].values[0][:-1])
     gdf = gdf.to_crs(tile_utm_zone)
 
-    # perform buffer if required (for relative slope that uses kernel)
+    # perform buffer if required (for slope smoothing using kernel)
     if buffer:
         gdf['geometry'] = gdf.buffer(buffer)
 
@@ -160,7 +164,7 @@ def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray, b
     )
 
 # define a function to calculate relative slope
-def calculate_relative_slope(dem_xarray, grid_shapefile_path, aoi_id, ref_xarray, buffer=None, nodata=0):
+def smoothen_slope(dem_xarray, grid_shapefile_path, aoi_id, ref_xarray, buffer=None, nodata=0):
     # clip the dem to the buffered GDF
     dem_xarray_clipped = clip_xarray_using_id(
         data_xarray=dem_xarray,
@@ -173,18 +177,22 @@ def calculate_relative_slope(dem_xarray, grid_shapefile_path, aoi_id, ref_xarray
     # calculate the slope
     slope_xarray = xrspatial.slope(dem_xarray_clipped.squeeze())
 
-    # run a kernel to calculate relative slope
-    y_size = x_size = buffer * 2 // 30
+    # run a kernel to calculate smoothen slope
+    cell_size = math.ceil(float(slope_xarray.spatial_ref.GeoTransform.split(' ')[1]))
+    y_size = x_size = (buffer * 2) // cell_size # get number of cells for kernel
+
+    if y_size % 2 == 0:
+        y_size -= 1
+        x_size -= 1
+
     slope_chips = deepcopy(slope_xarray.fillna(nodata))
     slope_chips = np.pad(slope_chips, (int(y_size / 2), int(x_size / 2)), 'reflect')
     slope_chips = image.extract_patches_2d(slope_chips, (y_size, x_size))
 
-    slope_min = slope_chips.min(axis=1).min(axis=1).reshape(slope_xarray.shape)
-    slope_max = slope_chips.max(axis=1).max(axis=1).reshape(slope_xarray.shape)
-    slope_relative = slope_max - slope_min
+    slope_mean = slope_chips.reshape(slope_chips.shape[0], -1).mean(axis=-1).reshape(slope_xarray.shape)
 
     return xr.DataArray(
-        slope_relative,
+        slope_mean,
         dims=slope_xarray.dims,
         coords=slope_xarray.coords
     )

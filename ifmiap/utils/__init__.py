@@ -435,6 +435,14 @@ def merge_flood_gdfs(flood_dir, date_index=5, delimiter='_'):
 
 
 
+def decibel_to_linear(decibels):
+    return 10 ** (decibels / 10)
+
+
+def linear_to_decibel(linear):
+    return 10 * np.log10(linear)
+
+
 def combine_flood_dates(flood_data, date_index=-5):
     data_dict = None
 

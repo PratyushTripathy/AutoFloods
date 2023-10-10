@@ -9,11 +9,10 @@ from datetime import datetime
 import os, json, shutil
 import xarray as xr
 import numpy as np
-from matplotlib import pyplot as plt
 
 __version__ = '2023.9.1'
 #DEM_OUTFILE = r'nasadem_aoi_id.nc'
-SLOPE_OUTFILE = r'relslope_aoi_id.nc'
+SLOPE_OUTFILE = r'slope_aoi_id.nc'
 JSON_OUTFILE = r'../resources/.json'
 NC_OUTFILE = f'../output/mean_std/aoi_id_vv_vh_mean_std.nc'
 FLOOD_RASTER_OUTFILE = f'../output/flood_raster/floodextent_id.tif'
@@ -30,9 +29,6 @@ FOLDERS_TO_CREATE = [
     r'../output/flood_vector',
     r'../output/flood_image',
     r'../output/final_output',
-    r'../output/flood_duration_raster',
-    r'../output/flood_count_raster',
-    #r'../resources/dem',
     r'../resources/slope'
 ]
 
@@ -308,6 +304,12 @@ class flood_mapper():
             for id in reprojected_clipped_dry
             }
 
+        # handle newly introduced nodata values
+        for id in self.stacked_dry:
+            for n in range(len(self.stacked_dry[id]['vv_stack'])):
+                self.stacked_dry[id]['vv_stack'][n] = self.stacked_dry[id]['vv_stack'][n].where(self.stacked_dry[id]['vv_stack'][n] < 50, np.nan)
+                self.stacked_dry[id]['vh_stack'][n] = self.stacked_dry[id]['vh_stack'][n].where(self.stacked_dry[id]['vh_stack'][n] < 50, np.nan)
+
         # calculate cell level mean and std for the dry scenes
         self.mean_std_by_aoi = {
             id: xr.concat(
@@ -342,6 +344,7 @@ class flood_mapper():
                 infile = self.nc_outfile.replace('_id_', f'_{id}_')
                 try:
                     self.mean_std_by_aoi[int(id)] = xr.load_dataarray(infile)
+                    self.mean_std_by_aoi[int(id)] = self.mean_std_by_aoi[int(id)].where(self.mean_std_by_aoi[int(id)] != 3.4028234663852886e+38, np.nan)
                     print(f'Previously processed {infile} read successfully!')
                 except:
                     print(f'{infile} present in JSON as processed but .nc file is missing.')
@@ -366,7 +369,7 @@ class flood_mapper():
             self.slope = dict()
             for id in slope_id_to_process:
                 print(f'Slope for tile ID {id} not found. Downloading DEM...')
-                self.slope[id] = ifmiap.preprocessing.calculate_relative_slope(
+                self.slope[id] = ifmiap.preprocessing.smoothen_slope(
                     dem_xarray=dem_merged_xarray,
                     grid_shapefile_path=self.grid_shapefile_path,
                     aoi_id=id,
@@ -425,6 +428,12 @@ class flood_mapper():
             }
             for id in self.wet_aoi_scene_dict
         }
+
+        # handle no data
+        for id in self.wet_scenes_by_aoi:
+            for scene_id in self.wet_scenes_by_aoi[id]:
+                self.wet_scenes_by_aoi[id][scene_id] = self.wet_scenes_by_aoi[id][scene_id].where(
+                    self.wet_scenes_by_aoi[id][scene_id] < 50, np.nan)
 
     def map_floods(self, vv_thd=2.5, vh_thd=2.5, rel_slope_thd=30, export_raster=False, export_vector=False, export_maps=False):
         self.flood_dict = mapfloods.map_floods(
@@ -529,36 +538,11 @@ class flood_mapper():
                 outfile_flood = FLOOD_SCENES_COUNT_OUTFILE.replace('_id.tif', f'_{dry_year_begin}_{dry_year_end}_{id}.tif')
                 ifmiap.utils.export_xarray(self.scene_count[id], outfile_flood)
 
-
-    def get_duration_count(self, export_raster=False):
-        self.flood_max_duration_dict = dict()
-        self.unique_flood_events_count_dict = dict()
-
-        for id in self.flood_dict:
-            flood_3d = ifmiap.utils.flood_data_3dstack(self.flood_dict[id])
-            max_durations, unique_event_counts = ifmiap.postprocessing.flood_duration_count(flood_3d)
-
-            self.flood_max_duration_dict[id] = utils.numpy_to_xarray(max_durations, list(self.flood_dict[id].values())[0])
-            self.unique_flood_events_count_dict[id] = utils.numpy_to_xarray(unique_event_counts, list(self.flood_dict[id].values())[0])
-
-        # export the flood rasters
-        dry_year_begin = min(self.dry_years)
-        dry_year_end = max(self.dry_years)
-        if export_raster == True:
-            for id in self.flood_max_duration_dict:
-                outfile_duration = FLOOD_DURATION_RASTER_OUTFILE.replace('_id.tif',
-                                                                         f'_{dry_year_begin}_{dry_year_end}_{id}.tif')
-                outfile_count = FLOOD_COUNT_RASTER_OUTFILE.replace('_id.tif',
-                                                                         f'_{dry_year_begin}_{dry_year_end}_{id}.tif')
-
-                ifmiap.utils.export_xarray(self.flood_max_duration_dict[id], outfile_duration)
-                ifmiap.utils.export_xarray(self.unique_flood_events_count_dict[id], outfile_count)
-
     def flush_output(self, remove_slope=False):
         if remove_slope:
-            folders_to_delete = FOLDERS_TO_CREATE[:]
+            folders_to_delete = FOLDERS_TO_CREATE[1:]
         else:
-            folders_to_delete = FOLDERS_TO_CREATE[:-1]
+            folders_to_delete = FOLDERS_TO_CREATE[1:-1]
 
         # add json files to the delete list
         folders_to_delete = folders_to_delete + [
