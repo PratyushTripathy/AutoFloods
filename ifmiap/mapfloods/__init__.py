@@ -29,11 +29,13 @@ def map_anomaly_cells(pre_xarray, post_xarray, vv_thd, vh_thd):
     """
     # calculate anomaly and flood cells for VV band
     anomaly_vv = (post_xarray.loc['vv_ds'] - pre_xarray.loc['vv_mean']) / pre_xarray.loc['vv_std']
-    floods_vv = (abs(anomaly_vv) > vv_thd).astype(int)
+    #floods_vv = (abs(anomaly_vv) > vv_thd).astype(int)
+    floods_vv = (anomaly_vv < -vv_thd).astype(int)
 
     # calculate anomaly and flood cells for VH band
     anomaly_vh = (post_xarray.loc['vh_ds'] - pre_xarray.loc['vh_mean']) / pre_xarray.loc['vh_std']
-    floods_vh = (abs(anomaly_vh) > vh_thd).astype(int)
+    #floods_vh = (abs(anomaly_vh) > vh_thd).astype(int)
+    floods_vh = (anomaly_vh < -vh_thd).astype(int)
 
     # here's what numbers in the flood map mean
     # 1. flood cells identified in the VH band

@@ -1,6 +1,6 @@
 #ifmiap/authenticate/__init__.py
 
-import os, pystac_client, planetary_computer
+import pystac_client, planetary_computer
 
 def sign_in():
     """

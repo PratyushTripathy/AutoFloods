@@ -9,6 +9,7 @@ from datetime import datetime
 import os, json, shutil
 import xarray as xr
 import numpy as np
+import rasterio
 
 __version__ = '2023.9.1'
 #DEM_OUTFILE = r'nasadem_aoi_id.nc'
@@ -26,6 +27,7 @@ FOLDERS_TO_CREATE = [
     r'../output/',
     r'../output/mean_std',
     r'../output/flood_raster',
+    r'../output/flood_raster/monthlyadded',
     r'../output/flood_vector',
     r'../output/flood_image',
     r'../output/final_output',
@@ -506,11 +508,14 @@ class flood_mapper():
         dry_year_begin = min(self.dry_years)
         dry_year_end = max(self.dry_years)
         if export_raster:
+            self.flood_raster_dict = dict()
             for id in self.flood_by_date:
                 outfile_flood = FLOOD_RASTER_STACKED_OUTFILE.replace('_id.tif', f'_{dry_year_begin}_{dry_year_end}_{id}.tif')
                 ifmiap.utils.export_xarray(self.flood_by_date[id], outfile_flood,
                                            sorted(self.flood_by_date[id].date.to_dict()['data'])
                                            )
+                self.project_flood_raster(outfile_flood, id)
+                self.flood_raster_dict[id] = outfile_flood
 
     def generate_number_of_scenes(self, export_raster=False):
         self.scene_count = dict()
@@ -529,7 +534,6 @@ class flood_mapper():
                                                 }
                                                 )
 
-
         # export if the export parameter is true
         dry_year_begin = min(self.dry_years)
         dry_year_end = max(self.dry_years)
@@ -537,6 +541,24 @@ class flood_mapper():
             for id in self.scene_count:
                 outfile_flood = FLOOD_SCENES_COUNT_OUTFILE.replace('_id.tif', f'_{dry_year_begin}_{dry_year_end}_{id}.tif')
                 ifmiap.utils.export_xarray(self.scene_count[id], outfile_flood)
+                self.project_flood_raster(outfile_flood, id)
+
+
+    def project_flood_raster(self, infile, tile_id):
+        # Define the correct projection (in this case, WGS 84)
+        gdf = gpd.read_file(self.grid_shapefile_path)
+        zone = int(gdf.loc[gdf.ID == tile_id].zone.values[0][:2])
+        new_crs = f'EPSG:326{zone}'
+
+        # Open the input GeoTIFF file and get its metadata
+        with rasterio.open(infile, 'r+') as src:
+            src.crs = new_crs
+
+
+    def monthly_sum(self):
+        for id in self.flood_raster_dict:
+            ifmiap.postprocessing.aggregate_monthly(self.flood_raster_dict[id])
+
 
     def flush_output(self, remove_slope=False):
         if remove_slope:

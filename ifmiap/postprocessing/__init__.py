@@ -1,7 +1,7 @@
 # ifmiap/postprocessing/__init__.py
 
 # import required libraries
-import rasterio.features
+import rasterio
 from shapely.geometry import shape
 import geopandas as gpd
 import numpy as np
@@ -102,5 +102,53 @@ def flood_duration_count(stacked_flood_data):
 
     return max_durations, unique_event_counts
 
+def aggregate_monthly(infile, outfile=None):
+    # Output GeoTIFF file path for the stacked bands
+    if outfile == None:
+        outfile = infile.replace('/flood_raster/', '/flood_raster/monthlyadded/').replace('.tif', '_monthly.tif')
 
+    # Open the input GeoTIFF file to get width, height, and metadata
+    with rasterio.open(infile) as src:
+        width = src.width
+        height = src.height
+        metadata = src.meta.copy()
+        bandnames = src.descriptions
+
+        # Extract unique months from band names
+        band_name_patterns = list(set([bandname[:6] for bandname in bandnames]))
+
+        if bandnames[0] != None:
+            # Initialize an empty array to store the stacked bands
+            stacked_bands = []
+
+            # Process each wildcard pattern
+            for band_n, band_name_pattern in enumerate(band_name_patterns):
+                # Get band names that match the current wildcard pattern
+                selected_band_indices = [i for i, name in enumerate(bandnames, start=1) if band_name_pattern in name]
+
+                # Read selected bands and create a sum for the current pattern
+                combined_band = np.zeros((height, width), dtype=np.uint8)  # Assuming dtype is uint8
+                for band_index in selected_band_indices:
+                    band_arr = src.read(band_index)
+                    combined_band += (band_arr == 3).astype(np.uint8)  # Assuming condition for summing is (band_arr == 3)
+
+                # Append the combined band to the list
+                stacked_bands.append(combined_band)
+
+            # Stack the bands along the third axis to create a 3-band array
+            stacked_array = np.stack(stacked_bands, axis=2)
+
+            # Update metadata for the output file (number of bands and data type)
+            metadata.update({
+                'count': len(band_name_patterns),  # Number of bands in the output file
+                'dtype': np.uint8,  # Data type of the stacked bands (uint8)
+                'nodata': 255  # Set the nodata value within the valid range of uint8 (0 to 255)
+            })
+
+            # Write the stacked bands to the output GeoTIFF file
+            with rasterio.open(outfile, 'w', **metadata) as dst:
+                # Write the stacked array as bands in the output file
+                for i, band_name in enumerate(band_name_patterns):
+                    dst.write(stacked_array[:, :, i], i+1)  # Write each band separately
+                    dst.set_band_description(i+1, band_name)  # Set band names
 
