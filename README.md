@@ -13,8 +13,7 @@ Tripathy, P. & Malladi, T. (2022). Global Flood Mapper: a novel Google Earth Eng
 A novel workflow for large scale automated flood mapping. (Manuscript in preparation)
 
 **Affiliation**<br/>
-Indian Institute for Human Settlements, Bengaluru, India.
-MapSolve AI Pvt. Ltd., India.
+MapSolve AI Pvt. Ltd., India.<br/>
 University of California, Santa Barbara, United States.
 
 **Funding**<br/>
