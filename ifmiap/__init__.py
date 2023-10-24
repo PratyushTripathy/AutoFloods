@@ -437,7 +437,7 @@ class flood_mapper():
                 self.wet_scenes_by_aoi[id][scene_id] = self.wet_scenes_by_aoi[id][scene_id].where(
                     self.wet_scenes_by_aoi[id][scene_id] < 50, np.nan)
 
-    def map_floods(self, vv_thd=2.5, vh_thd=2.5, rel_slope_thd=30, export_raster=False, export_vector=False, export_maps=False):
+    def map_floods(self, vv_thd=-3, vh_thd=-3, rel_slope_thd=20, export_raster=True, export_vector=False, export_maps=False):
         self.flood_dict = mapfloods.map_floods(
             mean_std_by_aoi=self.mean_std_by_aoi,
             wet_scenes_by_aoi=self.wet_scenes_by_aoi,
