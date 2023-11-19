@@ -154,8 +154,9 @@ def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray, b
     # perform buffer if required (for slope smoothing using kernel)
     if buffer:
         gdf['geometry'] = gdf.buffer(buffer)
-
-    x_min, y_min, x_max, y_max = gdf.total_bounds #ref_xarray.rio.bounds()
+        x_min, y_min, x_max, y_max = gdf.total_bounds
+    else:
+        x_min, y_min, x_max, y_max = ref_xarray.rio.bounds()
 
     # Resample dem DataArray to the common extent and resolution
     return data_xarray.rio.reproject(tile_utm_zone).interp(
