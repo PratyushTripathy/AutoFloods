@@ -387,7 +387,8 @@ class flood_mapper():
                     grid_shapefile_path=self.grid_shapefile_path,
                     aoi_id=id,
                     ref_xarray=self.mean_std_by_aoi[id],
-                    buffer=None
+                    buffer=None,
+                    slope=True
                 )
 
                 outfile = os.path.join(self.slope_dir, SLOPE_OUTFILE.replace('_id.nc', f'_{id}.nc'))

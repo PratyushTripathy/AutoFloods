@@ -142,7 +142,7 @@ def stack_images(clipped_dict, grid_shapefile_path, id):
         'vh_stack': vh_stack
     }
 
-def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray, buffer=None):
+def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray, buffer=None, slope=False):
     cell_size = float(ref_xarray.spatial_ref.GeoTransform.split(' ')[1])
 
     # extract target extent from the grid polygon
@@ -154,9 +154,15 @@ def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray, b
     # perform buffer if required (for slope smoothing using kernel)
     if buffer:
         gdf['geometry'] = gdf.buffer(buffer)
-        x_min, y_min, x_max, y_max = gdf.total_bounds
-    else:
+
+    # clipping slope requires bounding box from ref xarray before using gdf extent
+    if slope:
         x_min, y_min, x_max, y_max = ref_xarray.rio.bounds()
+        data_xarray = data_xarray.rio.reproject(tile_utm_zone).interp(
+            x=np.arange(x_min, x_max, cell_size),
+            y=np.arange(y_max, y_min, -cell_size)
+            )
+    x_min, y_min, x_max, y_max = gdf.total_bounds
 
     # Resample dem DataArray to the common extent and resolution
     return data_xarray.rio.reproject(tile_utm_zone).interp(
