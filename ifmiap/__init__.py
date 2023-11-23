@@ -220,7 +220,8 @@ class flood_mapper():
                         skipped_ids.append(key)
 
                 # merge new info with old content
-                final_json_data = old_content | aoi_scene_dict
+                #final_json_data = old_content | aoi_scene_dict
+                final_json_data = {**old_content, **aoi_scene_dict}
 
         # sort the dictionaries and the json files
         final_json_data = {int(key): final_json_data[key] for key in final_json_data.keys()}
@@ -247,7 +248,8 @@ class flood_mapper():
                     ))
                     del old_content[key]
 
-            final_json_data = old_content | scene_aoi_dict
+            #final_json_data = old_content | scene_aoi_dict
+            final_json_data = {**old_content, **scene_aoi_dict}
 
         # sort the dictionaries and the json files
         final_json_data = {key: sorted(final_json_data[key]) for key in sorted(final_json_data)}
