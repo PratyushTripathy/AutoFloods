@@ -46,6 +46,7 @@ class flood_mapper():
         self.dry_date_col = dry_date_col
         self.dry_years = range(min(dry_years), max(dry_years)+1)
         self.wet_dates = [utils.string_to_date_range(wet_duration[0], wet_duration[1])]
+        self.wet_yearmonths = [date_obj.strftime("%Y%m") for date_obj in self.wet_dates[0]]
         #self.dem_dir = dem_dir
         self.slope_dir = slope_dir
         self.create_out_dirs()
@@ -452,12 +453,14 @@ class flood_mapper():
 
         dry_year_begin = min(self.dry_years)
         dry_year_end = max(self.dry_years)
+        wet_yearmonth_begin = self.wet_yearmonths[0]
+        wet_yearmonth_end = self.wet_yearmonths[-1]
 
         # export the flood rasters
         if export_raster == True:
             for id in self.flood_dict:
                 for scene_id in self.flood_dict[id]:
-                    outfile_flood = FLOOD_RASTER_OUTFILE.replace('_id.tif', f'_{dry_year_begin}_{dry_year_end}_{id}_{"_".join(scene_id.split("_")[4:])}.tif')
+                    outfile_flood = FLOOD_RASTER_OUTFILE.replace('_id.tif', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{"_".join(scene_id.split("_")[4:])}.tif')
                     ifmiap.utils.export_xarray(self.flood_dict[id][scene_id], outfile_flood)
 
         # polygonize the flood rasters
@@ -472,7 +475,7 @@ class flood_mapper():
 
             for id in self.flood_dict:
                 for scene_id in self.flood_dict[id]:
-                    outfile_flood = FLOOD_VECTOR_OUTFILE.replace('_id.gpkg', f'_{dry_year_begin}_{dry_year_end}_{id}_{"_".join(scene_id.split("_")[4:])}.gpkg')
+                    outfile_flood = FLOOD_VECTOR_OUTFILE.replace('_id.gpkg', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{"_".join(scene_id.split("_")[4:])}.gpkg')
                     # export only if the GDF has any flood cells
                     if self.flood_gdf_dict[id][scene_id].shape[0] > 0:
                         self.flood_gdf_dict[id][scene_id].to_crs("EPSG:4326").to_file(outfile_flood, index=False)
@@ -485,7 +488,7 @@ class flood_mapper():
         if export_maps == True:
             for id in self.flood_dict:
                 for scene_id in self.flood_dict[id]:
-                    outfile_flood = FLOOD_MAP_OUTFILE.replace('_id.png', f'_{dry_year_begin}_{dry_year_end}_{id}_{"_".join(scene_id.split("_")[4:])}.png')
+                    outfile_flood = FLOOD_MAP_OUTFILE.replace('_id.png', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{"_".join(scene_id.split("_")[4:])}.png')
 
                     mapfloods.flood_images(
                         flood_xarray=self.flood_dict[id][scene_id],
@@ -510,10 +513,13 @@ class flood_mapper():
         # export if the export parameter is true
         dry_year_begin = min(self.dry_years)
         dry_year_end = max(self.dry_years)
+        wet_yearmonth_begin = self.wet_yearmonths[0]
+        wet_yearmonth_end = self.wet_yearmonths[-1]
+
         if export_raster:
             self.flood_raster_dict = dict()
             for id in self.flood_by_date:
-                outfile_flood = FLOOD_RASTER_STACKED_OUTFILE.replace('_id.tif', f'_{dry_year_begin}_{dry_year_end}_{id}.tif')
+                outfile_flood = FLOOD_RASTER_STACKED_OUTFILE.replace('_id.tif', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}.tif')
                 ifmiap.utils.export_xarray(self.flood_by_date[id], outfile_flood,
                                            sorted(self.flood_by_date[id].date.to_dict()['data'])
                                            )
@@ -540,9 +546,12 @@ class flood_mapper():
         # export if the export parameter is true
         dry_year_begin = min(self.dry_years)
         dry_year_end = max(self.dry_years)
+        wet_yearmonth_begin = self.wet_yearmonths[0]
+        wet_yearmonth_end = self.wet_yearmonths[-1]
+
         if export_raster:
             for id in self.scene_count:
-                outfile_flood = FLOOD_SCENES_COUNT_OUTFILE.replace('_id.tif', f'_{dry_year_begin}_{dry_year_end}_{id}.tif')
+                outfile_flood = FLOOD_SCENES_COUNT_OUTFILE.replace('_id.tif', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}.tif')
                 ifmiap.utils.export_xarray(self.scene_count[id], outfile_flood)
                 self.project_flood_raster(outfile_flood, id)
 
