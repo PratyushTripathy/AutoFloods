@@ -182,13 +182,16 @@ class flood_mapper():
             for aoi in self.aoi_union
             }
 
+        
         if dry_wet == 'dry':
             self.dry_s1_scenes = s1_scenes
         elif dry_wet == 'wet':
             self.wet_s1_scenes = s1_scenes
 
         # generate scene_aoi dictionaries
+        # It could be that the ID does not have any wet scene, this is a bug and needs to be fixed later
         self.generate_scene_aoi_dict(dry_wet=dry_wet, verbose=verbose)
+        
 
     def generate_scene_aoi_dict(self, dry_wet='dry', verbose=False):
         if dry_wet == 'dry':
@@ -499,16 +502,17 @@ class flood_mapper():
         self.flood_by_date = dict()
 
         for id in self.flood_dict:
-            dates_list, floods_stacked = ifmiap.utils.flood_data_3dstack(self.flood_dict[id])
-            self.flood_by_date[id] = xr.DataArray(
-                floods_stacked,
-                dims=['date', 'y', 'x'],
-                coords = {'date': dates_list,
-                          **{
-                              'y':self.mean_std_by_aoi[id].coords['y'],
-                              'x':self.mean_std_by_aoi[id].coords['x']
-                          }}
-            )
+            if len(self.flood_dict[id]) > 0: # process only if there is a wet scene (throws error otherwise)
+                dates_list, floods_stacked = ifmiap.utils.flood_data_3dstack(self.flood_dict[id])
+                self.flood_by_date[id] = xr.DataArray(
+                    floods_stacked,
+                    dims=['date', 'y', 'x'],
+                    coords = {'date': dates_list,
+                              **{
+                                  'y':self.mean_std_by_aoi[id].coords['y'],
+                                  'x':self.mean_std_by_aoi[id].coords['x']
+                              }}
+                )
 
         # export if the export parameter is true
         dry_year_begin = min(self.dry_years)
@@ -530,18 +534,19 @@ class flood_mapper():
         self.scene_count = dict()
 
         for id in self.wet_scenes_by_aoi:
-            self.scene_count[id] = xr.DataArray(np.stack([
-                np.any(np.isnan(
-                    self.wet_scenes_by_aoi[id][key]
-                ), axis=0)
-                for key in self.wet_scenes_by_aoi[id]
-                ]).sum(axis=0),
-                                                dims=self.mean_std_by_aoi[id].dims[1:],
-                                                coords={
-                                                    'y':self.mean_std_by_aoi[id].coords['y'],
-                                                    'x':self.mean_std_by_aoi[id].coords['x']
-                                                }
-                                                )
+            if len(self.wet_scenes_by_aoi[id]) > 0: # process only if there is a wet scene (throws error otherwise)
+                self.scene_count[id] = xr.DataArray(np.stack([
+                    np.any(np.isnan(
+                        self.wet_scenes_by_aoi[id][key]
+                    ), axis=0)
+                    for key in self.wet_scenes_by_aoi[id]
+                    ]).sum(axis=0),
+                                                    dims=self.mean_std_by_aoi[id].dims[1:],
+                                                    coords={
+                                                        'y':self.mean_std_by_aoi[id].coords['y'],
+                                                        'x':self.mean_std_by_aoi[id].coords['x']
+                                                    }
+                                                    )
 
         # export if the export parameter is true
         dry_year_begin = min(self.dry_years)

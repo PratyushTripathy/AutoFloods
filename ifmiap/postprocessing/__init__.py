@@ -1,6 +1,7 @@
 # ifmiap/postprocessing/__init__.py
 
 # import required libraries
+import os
 import rasterio
 from shapely.geometry import shape
 import geopandas as gpd
@@ -103,9 +104,17 @@ def flood_duration_count(stacked_flood_data):
     return max_durations, unique_event_counts
 
 def aggregate_monthly(infile, outfile=None):
+    # extract year and month information from the file name
+    yearmonthtag = '_'.join(infile.split('_')[1:-1])
+    
     # Output GeoTIFF file path for the stacked bands
     if outfile == None:
-        outfile = infile.replace('/flood_raster/', '/flood_raster/monthlyadded/').replace('.tif', '_monthly.tif')
+        outfile = infile.replace('/flood_raster/', f'/flood_raster/monthlyadded_{yearmonthtag}/').replace('.tif', '_monthly.tif')
+
+    # create monthly folder for that month and year
+    folder_to_create = os.path.split(outfile)[0]
+    if not os.path.exists(folder_to_create):
+        os.mkdir(folder_to_create)
 
     # Open the input GeoTIFF file to get width, height, and metadata
     with rasterio.open(infile) as src:
