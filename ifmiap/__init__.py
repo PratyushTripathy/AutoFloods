@@ -521,9 +521,17 @@ class flood_mapper():
         wet_yearmonth_end = self.wet_yearmonths[-1]
 
         if export_raster:
+            yearmonthtag = f'DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}'
+            folder_to_create = os.path.split(FLOOD_RASTER_STACKED_OUTFILE)[0].replace('/flood_raster', f'/flood_raster/floodextentstacked_{yearmonthtag}/')
+            if not os.path.exists(folder_to_create):
+                os.mkdir(folder_to_create)
+            
             self.flood_raster_dict = dict()
             for id in self.flood_by_date:
-                outfile_flood = FLOOD_RASTER_STACKED_OUTFILE.replace('_id.tif', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}.tif')
+                outfile_flood = os.path.join(
+                    folder_to_create,
+                    os.path.split(FLOOD_RASTER_STACKED_OUTFILE)[-1].replace('_id.tif', f'{yearmonthtag}_{id}.tif')
+                )
                 ifmiap.utils.export_xarray(self.flood_by_date[id], outfile_flood,
                                            sorted(self.flood_by_date[id].date.to_dict()['data'])
                                            )
@@ -555,8 +563,16 @@ class flood_mapper():
         wet_yearmonth_end = self.wet_yearmonths[-1]
 
         if export_raster:
+            yearmonthtag = f'DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}'
+            folder_to_create = os.path.split(FLOOD_SCENES_COUNT_OUTFILE)[0].replace('/flood_raster', f'/flood_raster/floodscenescount_{yearmonthtag}/')
+            if not os.path.exists(folder_to_create):
+                os.mkdir(folder_to_create)
+            
             for id in self.scene_count:
-                outfile_flood = FLOOD_SCENES_COUNT_OUTFILE.replace('_id.tif', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}.tif')
+                outfile_flood = os.path.join(
+                    folder_to_create,
+                    os.path.split(FLOOD_SCENES_COUNT_OUTFILE)[-1].replace('_id.tif', f'{yearmonthtag}_{id}.tif')
+                )
                 ifmiap.utils.export_xarray(self.scene_count[id], outfile_flood)
                 self.project_flood_raster(outfile_flood, id)
 
