@@ -1,10 +1,10 @@
-ifmiap.postprocessing package
+autofloods.postprocessing package
 =============================
 
 Module contents
 ---------------
 
-.. automodule:: ifmiap.postprocessing
+.. automodule:: autofloods.postprocessing
    :members:
    :undoc-members:
    :show-inheritance:

@@ -1,10 +1,10 @@
-# ifmiap/__init__.py
+# autofloods/__init__.py
 
 import geopandas as gpd
-import ifmiap.utils
-import ifmiap.preprocessing
-import ifmiap.postprocessing
-import ifmiap.mapfloods
+import autofloods.utils
+import autofloods.preprocessing
+import autofloods.postprocessing
+import autofloods.mapfloods
 from datetime import datetime
 import os, json, shutil
 import xarray as xr
@@ -120,7 +120,7 @@ class flood_mapper():
 
         Examples
         --------
-        >>> from ifmiap import flood_mapper
+        >>> from autofloods import flood_mapper
         >>> flood_mapper_obj = flood_mapper(
                 grid_shapefile = r'../resources/india_utm_fishnet_buffer.gpkg',
                 grid_id_list = [1, 2, 3, 4], # or zone_id_dict['45R']
@@ -471,14 +471,14 @@ class flood_mapper():
             # download DEM for select IDs
             bbox_for_dem_download = utils.gpd_to_json(id_list=slope_id_to_process, infile=self.grid_shapefile_path,
                                                       separate=False, id_key=self.id_key, buffer=buffer)
-            dem_merged_xarray = ifmiap.utils.download_nasadem(bbox_for_dem_download[0], overview_level=dem_overview, nodata=nodata)
+            dem_merged_xarray = autofloods.utils.download_nasadem(bbox_for_dem_download[0], overview_level=dem_overview, nodata=nodata)
 
             # for each ID, clip using the buffered GDF, calculate relative slope
             # and then clip to the actual tile extent
             self.slope = dict()
             for id in slope_id_to_process:
                 print(f'Slope for tile ID {id} not found. Downloading DEM...')
-                self.slope[id] = ifmiap.preprocessing.smoothen_slope(
+                self.slope[id] = autofloods.preprocessing.smoothen_slope(
                     dem_xarray=dem_merged_xarray,
                     grid_shapefile_path=self.grid_shapefile_path,
                     aoi_id=id,
@@ -489,7 +489,7 @@ class flood_mapper():
 
             # for each of the ids, clip slope and export to the .nc file
             for id in slope_id_to_process:
-                self.slope[id] = ifmiap.preprocessing.clip_xarray_using_id(
+                self.slope[id] = autofloods.preprocessing.clip_xarray_using_id(
                     data_xarray=self.slope[id],
                     grid_shapefile_path=self.grid_shapefile_path,
                     aoi_id=id,
@@ -499,7 +499,7 @@ class flood_mapper():
                 )
 
                 outfile = os.path.join(self.slope_dir, SLOPE_OUTFILE.replace('_id.nc', f'_{id}.nc'))
-                ifmiap.utils.export_xarray(self.slope[id], outfile)
+                autofloods.utils.export_xarray(self.slope[id], outfile)
 
         else: # load the slope if already present
             for id in self.selected_grid_id:
@@ -519,13 +519,13 @@ class flood_mapper():
             id: {
                 scene_id: xr.concat(
                     [
-                        ifmiap.preprocessing.clip_xarray_using_id(
+                        autofloods.preprocessing.clip_xarray_using_id(
                             data_xarray=self.s1_wet_dict[scene_id]['vv_ds'],
                             grid_shapefile_path=self.grid_shapefile_path,
                             aoi_id=id,
                             ref_xarray=self.mean_std_by_aoi[id]
                         ),
-                        ifmiap.preprocessing.clip_xarray_using_id(
+                        autofloods.preprocessing.clip_xarray_using_id(
                             data_xarray=self.s1_wet_dict[scene_id]['vh_ds'],
                             grid_shapefile_path=self.grid_shapefile_path,
                             aoi_id=id,
@@ -565,13 +565,13 @@ class flood_mapper():
             for id in self.flood_dict:
                 for scene_id in self.flood_dict[id]:
                     outfile_flood = FLOOD_RASTER_OUTFILE.replace('_id.tif', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{"_".join(scene_id.split("_")[4:])}.tif')
-                    ifmiap.utils.export_xarray(self.flood_dict[id][scene_id], outfile_flood)
+                    autofloods.utils.export_xarray(self.flood_dict[id][scene_id], outfile_flood)
 
         # polygonize the flood rasters
         if export_vector == True:
             self.flood_gdf_dict = {
                 id: {
-                    scene_id: ifmiap.postprocessing.polygonize_flood_raster(self.flood_dict[id][scene_id])
+                    scene_id: autofloods.postprocessing.polygonize_flood_raster(self.flood_dict[id][scene_id])
                     for scene_id in self.flood_dict[id]
                 }
                 for id in self.flood_dict
@@ -604,7 +604,7 @@ class flood_mapper():
 
         for id in self.flood_dict:
             if len(self.flood_dict[id]) > 0: # process only if there is a wet scene (throws error otherwise)
-                dates_list, floods_stacked = ifmiap.utils.flood_data_3dstack(self.flood_dict[id])
+                dates_list, floods_stacked = autofloods.utils.flood_data_3dstack(self.flood_dict[id])
                 self.flood_by_date[id] = xr.DataArray(
                     floods_stacked,
                     dims=['date', 'y', 'x'],
@@ -633,7 +633,7 @@ class flood_mapper():
                     folder_to_create,
                     os.path.split(FLOOD_RASTER_STACKED_OUTFILE)[-1].replace('_id.tif', f'{yearmonthtag}_{id}.tif')
                 )
-                ifmiap.utils.export_xarray(self.flood_by_date[id], outfile_flood,
+                autofloods.utils.export_xarray(self.flood_by_date[id], outfile_flood,
                                            sorted(self.flood_by_date[id].date.to_dict()['data'])
                                            )
                 self.project_flood_raster(outfile_flood, id)
@@ -674,7 +674,7 @@ class flood_mapper():
                     folder_to_create,
                     os.path.split(FLOOD_SCENES_COUNT_OUTFILE)[-1].replace('_id.tif', f'{yearmonthtag}_{id}.tif')
                 )
-                ifmiap.utils.export_xarray(self.scene_count[id], outfile_flood)
+                autofloods.utils.export_xarray(self.scene_count[id], outfile_flood)
                 self.project_flood_raster(outfile_flood, id)
 
 
@@ -691,7 +691,7 @@ class flood_mapper():
 
     def monthly_sum(self):
         for id in self.flood_raster_dict:
-            ifmiap.postprocessing.aggregate_monthly(self.flood_raster_dict[id])
+            autofloods.postprocessing.aggregate_monthly(self.flood_raster_dict[id])
 
 
     def flush_output(self, remove_slope=False):

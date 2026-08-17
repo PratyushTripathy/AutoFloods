@@ -1,10 +1,10 @@
-ifmiap.mapfloods package
+autofloods.mapfloods package
 ========================
 
 Module contents
 ---------------
 
-.. automodule:: ifmiap.mapfloods
+.. automodule:: autofloods.mapfloods
    :members:
    :undoc-members:
    :show-inheritance:

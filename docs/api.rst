@@ -1,11 +1,11 @@
 .. _api_ref:
 
-.. automodule:: ifmiap
+.. automodule:: autofloods
 
-.. currentmodule:: ifmiap
+.. currentmodule:: autofloods
 
 
-IFMIAP API reference
+AutoFloods API reference
 ======================
 	
 Utility
@@ -14,13 +14,13 @@ Utility
 .. autosummary::
    :toctree: generated/
 
-    ifmiap.utils.date_range
-    ifmiap.utils.string_to_date_range
-    ifmiap.utils.gpd_to_json
-    ifmiap.utils.search_sentinel_data
-    ifmiap.utils.s1item_footprint
-    ifmiap.utils.seggregate_sentinel_search
-    ifmiap.utils.export_xarray
+    autofloods.utils.date_range
+    autofloods.utils.string_to_date_range
+    autofloods.utils.gpd_to_json
+    autofloods.utils.search_sentinel_data
+    autofloods.utils.s1item_footprint
+    autofloods.utils.seggregate_sentinel_search
+    autofloods.utils.export_xarray
 
 Preprocessing
 -----------------
@@ -28,6 +28,6 @@ Preprocessing
 .. autosummary::
    :toctree: generated/
 
-    ifmiap.preprocessing.read_sentinel1_stac
-    ifmiap.preprocessing.reproject_clip_stac
-    ifmiap.preprocessing.stack_images
+    autofloods.preprocessing.read_sentinel1_stac
+    autofloods.preprocessing.reproject_clip_stac
+    autofloods.preprocessing.stack_images

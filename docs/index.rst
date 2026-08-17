@@ -1,9 +1,9 @@
-.. ifmiap documentation master file, created by
+.. autofloods documentation master file, created by
    sphinx-quickstart on Wed Nov 29 10:32:12 2023.
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Welcome to ifmiap's documentation!
+Welcome to autofloods's documentation!
 ==================================
 
 .. toctree::

@@ -1,10 +1,10 @@
-ifmiap.authenticate package
+autofloods.authenticate package
 ===========================
 
 Module contents
 ---------------
 
-.. automodule:: ifmiap.authenticate
+.. automodule:: autofloods.authenticate
    :members:
    :undoc-members:
    :show-inheritance:

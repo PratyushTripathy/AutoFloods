@@ -1,4 +1,4 @@
-#ifmiap/authenticate/__init__.py
+#autofloods/authenticate/__init__.py
 
 import pystac_client, planetary_computer
 

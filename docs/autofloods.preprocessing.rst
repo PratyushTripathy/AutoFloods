@@ -1,10 +1,10 @@
-ifmiap.preprocessing package
+autofloods.preprocessing package
 ============================
 
 Module contents
 ---------------
 
-.. automodule:: ifmiap.preprocessing
+.. automodule:: autofloods.preprocessing
    :members:
    :undoc-members:
    :show-inheritance:

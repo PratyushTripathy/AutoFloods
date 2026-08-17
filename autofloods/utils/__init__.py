@@ -1,4 +1,4 @@
-# ifmiap/utils/__init__.py
+# autofloods/utils/__init__.py
 
 # import required libraries
 import datetime, glob, os

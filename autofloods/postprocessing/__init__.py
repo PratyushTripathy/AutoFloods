@@ -1,4 +1,4 @@
-# ifmiap/postprocessing/__init__.py
+# autofloods/postprocessing/__init__.py
 
 # import required libraries
 import os

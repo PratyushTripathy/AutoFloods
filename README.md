@@ -1,4 +1,4 @@
-# IFMIAP: India Flood Monitoring and Impact Assessment Portal
+# AutoFloods: India Flood Monitoring and Impact Assessment Portal
 This repository contains the source code of the flood mapping piece of the India Flood Mapping and Impact Assessment Portal.
 
 Data is pulled from the Microsoft Planetary Computer (MPC) Spatio Temporal Asset Catalog (STAC) API. The workflow is capable of mapping floods from Sentinel-1 SAR data for large areas. To keep the scaling up of the flood mapping algorithm stable, this workflow relies of processing large areas by processing them in smaller fragments.

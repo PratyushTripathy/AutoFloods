@@ -1,4 +1,4 @@
-# ifmiap/preprocessing/__init__.py
+# autofloods/preprocessing/__init__.py
 
 # import required libraries
 import rioxarray

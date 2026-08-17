@@ -1,4 +1,4 @@
-# ifmiap/mapfloods/__init__.py
+# autofloods/mapfloods/__init__.py
 import os
 import xarray as xr
 import matplotlib.pyplot as plt
