@@ -40,6 +40,107 @@ class flood_mapper():
 
     def __init__(self, grid_shapefile, grid_id_list, dry_date_col='dry_month', id_col='ID',
                  dry_years=list(range(2015, 2021)), wet_duration=['2020/07', '2020/09'], slope_dir=None):
+        """
+        Initiate flood mapper
+
+        Initialize a `flood_mapper` instance and create output directories.
+
+        Parameters
+        __________
+        grid_shapefile                  : str
+                                          Path to the shapefile containing grid information.
+        grid_id_list                    : list
+                                          List of grid IDs.
+        dry_date_col                    : str
+                                          Column name for dry month information in the shapefile (default: 'dry_month').
+        id_col                          : str
+                                          Column name for grid IDs in the shapefile (default: 'ID').
+        dry_years                       : list
+                                          List of dry years to consider (default: range from 2015 to 2020).
+        wet_duration                    : list
+                                          List of wet duration in the format 'YYYY/MM' (default: ['2020/07', '2020/09']).
+        slope_dir                       : str
+                                          Directory where slope calculated from the downloaded DEM will be stored. (default: None).
+
+        Attributes
+        ----------
+        grid_shapefile_path             : str
+                                          Path to the shapefile containing grid information.
+
+        selected_grid_id                : list
+                                          List of grid IDs to process.
+
+        id_key                          : str
+                                          Column name for grid IDs in the shapefile.
+
+        dry_date_col                    : str
+                                          Column name for dry month information in the shapefile
+
+        dry_years                       : list
+                                          List of dry years to consider
+
+        wet_dates                       : list
+                                          List of wet duration in the format 'YYYY/MM'.
+
+        wet_yearmonths                  : xxx
+                                          xxx
+
+        slope_dir                       : xxx
+                                          xxx
+
+        aoi_union                       : xxx
+                                          xxx
+
+        aoi_list                        : xxx
+                                          xxx
+
+        timestamp                       : xxx
+                                          xxx
+
+        dry_aoi_scene_json_file         : xxx
+                                          xxx
+
+        dry_scene_aoi_json_file         : xxx
+                                          xxx
+
+        wet_aoi_scene_json_file         : xxx
+                                          xxx
+
+        wet_scene_aoi_json_file         : xxx
+                                          xxx
+
+        nc_outfile                      : xxx
+                                          xxx
+
+        old_dry_aoi_scene_dict          : xxx
+                                          xxx
+
+        already_processed_aoi_ids       : xxx
+                                          xxx
+
+        Examples
+        --------
+        >>> from ifmiap import flood_mapper
+        >>> flood_mapper_obj = flood_mapper(
+                grid_shapefile = r'../resources/india_utm_fishnet_buffer.gpkg',
+                grid_id_list = [1, 2, 3, 4], # or zone_id_dict['45R']
+                dry_date_col = 'dry_month',
+                id_col = 'ID',
+                dry_years = [2018, 2022],
+                slope_dir = r'../resources/slope/',
+                wet_duration = ['2022/08', '2022/10']
+            )
+
+        Where `india_utm_fishnet_buffer.gpkg` looks like this:
+
+        .. image:: autofloods_logo.png
+           :alt: Screenshot of the shapefile
+
+        and the attribute table looks like:
+
+        An optional `zone_id_dict' can be used that contains UTM zone wise list of IDs.
+
+        """
         self.grid_shapefile_path = grid_shapefile
         self.selected_grid_id = grid_id_list
         self.id_key = id_col
