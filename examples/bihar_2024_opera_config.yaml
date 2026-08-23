@@ -12,12 +12,13 @@
 
 aoi:
   grid_shapefile: resources/india_utm_fishnet_buffer.gpkg
-  # All 22 tiles covering the state of Bihar. Processed one tile per
-  # flood_mapper instance / one SLURM job in production (see
-  # scripts/run_bihar_all_years.sh); listing all 22 here runs them
-  # sequentially in a single process instead.
+  # The 19 tiles that actually intersect Bihar's boundary (tiles 323, 328,
+  # and 331 sit entirely in neighbouring states and are excluded from the
+  # analysis). Processed one tile per flood_mapper instance / one SLURM job
+  # in production (see scripts/run_bihar_all_years.sh); listing all 19 here
+  # runs them sequentially in a single process instead.
   grid_id_list: [274, 275, 276, 277, 313, 314, 315, 316, 317, 318, 319, 320,
-                 321, 322, 323, 324, 325, 326, 328, 329, 330, 331]
+                 321, 322, 324, 325, 326, 329, 330]
   dry_date_col: dry_month
   id_col: ID
 

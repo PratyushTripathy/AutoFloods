@@ -2,7 +2,7 @@
 Generate one run_autofloods.py YAML config per (tile, year) for the full
 Bihar OPERA production batch. Matches the original production settings
 (dry_years=[year,year], wet_duration=[f'{year}/07', f'{year}/10'],
-same 22-tile fishnet list, same thresholds) used for the 80m/20m MPC
+same 19-tile fishnet list, same thresholds) used for the 80m/20m MPC
 batches and the tile-321 OPERA soak tests -- just generalized across
 years and all tiles via config instead of hand-edited scripts.
 """
@@ -11,8 +11,11 @@ import os
 BASE = '/home/emlab/projects/current-projects/edge-autofloods/AutoFloods'
 CONFIG_DIR = f'{BASE}/scripts/configs/bihar_opera'
 
+# 19 tiles that actually intersect Bihar's boundary. Tiles 323, 328, and 331
+# sit entirely outside Bihar in neighbouring states and are excluded from
+# the analysis entirely (see scripts/figures/fig_grid.py).
 TILES = [274, 275, 276, 277, 313, 314, 315, 316, 317, 318, 319, 320,
-         321, 322, 323, 324, 325, 326, 328, 329, 330, 331]
+         321, 322, 324, 325, 326, 329, 330]
 
 YEARS = [2024, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2025, 2026]
 
