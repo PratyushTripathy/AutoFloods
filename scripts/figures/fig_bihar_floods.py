@@ -20,8 +20,7 @@ where to put it (or set AUTOFLOODS_BOUNDARY_DIR).
 Usage:
     python scripts/figures/fig_bihar_floods.py
 Writes:
-    figures/fig_bihar_floods.pdf (vector)
-    figures/fig_bihar_floods.png (300 DPI raster -- map figure)
+    figures/fig_bihar_floods.png (300 DPI raster -- map figure; PNG only, no PDF)
 """
 import os
 import sys
@@ -42,6 +41,7 @@ OUT_DIR = '/home/emlab/projects/current-projects/edge-autofloods/autofloods-manu
 MOSAIC_DIR = '/home/emlab/projects/current-projects/edge-autofloods/AutoFloods/output/bihar_opera_30m'
 YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
 TARGET_RESOLUTION_M = 300  # display resolution; coarsened via mean, not decimation
+PAD_KM = 8  # physical (not degree) padding between the Bihar outline and each panel's frame
 VMAX = 5  # fixed colour-scale ceiling (not data-driven), per manuscript style decision
 DISPLAY_CRS = 'EPSG:4326'  # WGS84 -- display only; area stats (Figure 4) use Mollweide
 NAN_SENTINEL = -9999.0  # float nodata; averaging produces fractional values, not counts
@@ -123,11 +123,59 @@ for year in YEARS:
 
 ncols = 3
 nrows = int(np.ceil(len(YEARS) / ncols))
-sample_h, sample_w = rasters[YEARS[0]][0].shape
-panel_aspect = sample_h / sample_w
-fig, axes = plt.subplots(nrows, ncols, figsize=(9.5, 9.5 / ncols * panel_aspect * nrows))
-axes = axes.flatten()
-plt.subplots_adjust(wspace=0.02, hspace=0.06)
+
+# Pad relative to the Bihar *vector* boundary's own bounding box, not the
+# raster's -- the raster was clipped in Mollweide (an axis-aligned box in
+# that CRS) and then reprojected to WGS84, and a Mollweide-aligned box
+# does not reproject to a WGS84 box aligned the same way, so the raster's
+# WGS84 bounds sit noticeably off-centre from the vector polygon's own
+# WGS84 bounds (checked directly: raster xmin was ~0.86 deg west of the
+# polygon's true xmin, versus only ~0.75 deg east on the xmax side --
+# enough asymmetry to make left/right padding visibly uneven even though
+# top/bottom happened to align closely). All years share one boundary, so
+# this is computed once.
+raw_left, raw_bottom, raw_right, raw_top = bihar_gdf.total_bounds
+mid_lat = (raw_bottom + raw_top) / 2
+km_per_deg_lon = 111.32 * np.cos(np.radians(mid_lat))
+pad_x_deg = PAD_KM / km_per_deg_lon
+pad_y_deg = PAD_KM / 111.32
+xlim = (raw_left - pad_x_deg, raw_right + pad_x_deg)
+ylim = (raw_bottom - pad_y_deg, raw_top + pad_y_deg)
+
+# Panel (frame) aspect is set to exactly match the displayed data aspect
+# (padded extent, corrected for the same 1/cos(latitude) stretch applied
+# to each axes below) so matplotlib doesn't have to letterbox the image
+# into the frame -- that letterboxing is what previously produced heavy
+# horizontal padding alongside a near-zero vertical margin, and (since it
+# insets the plotted image within an unchanged box) also reintroduced an
+# apparent gap between touching columns.
+#
+# That letterboxing was triggered by fig.colorbar(..., ax=axes[:9]),
+# which silently shrinks the *existing* panel axes horizontally to make
+# room for itself -- breaking the width:height ratio those axes were
+# built with, so matplotlib's aspect enforcement (adjustable='box') then
+# padded the mismatch back in as blank margin. The fix is to reserve the
+# colorbar's strip of figure width up front, in the same GridSpec used
+# for the panels, and hand the colorbar an explicit `cax` rather than
+# letting it resize axes after the fact -- so panel geometry is fixed
+# exactly once, correctly, and never touched again.
+CBAR_WIDTH_FRAC = 0.045  # fraction of total figure width reserved for the colourbar
+CBAR_GAP_FRAC = 0.015    # gap between the grid and the colourbar
+GRID_WIDTH_FRAC = 1 - CBAR_WIDTH_FRAC - CBAR_GAP_FRAC
+HSPACE_FRAC = 0.06
+WSPACE_FRAC = 0.03  # small gap between columns -- a previous pass set this to 0 (touching
+                     # columns) per an earlier request, since reversed: some gap reads better
+
+panel_aspect = ((ylim[1] - ylim[0]) / (xlim[1] - xlim[0])) / np.cos(np.radians(mid_lat))
+FIG_W = 9.5
+panel_width_in = FIG_W * GRID_WIDTH_FRAC / (ncols + (ncols - 1) * WSPACE_FRAC)
+panel_height_in = panel_width_in * panel_aspect
+FIG_H = panel_height_in * (nrows + (nrows - 1) * HSPACE_FRAC)
+
+fig = plt.figure(figsize=(FIG_W, FIG_H))
+gs = fig.add_gridspec(nrows, ncols, left=0.0, right=GRID_WIDTH_FRAC, top=1.0, bottom=0.0,
+                       wspace=WSPACE_FRAC, hspace=HSPACE_FRAC)
+axes = np.array([[fig.add_subplot(gs[r, c]) for c in range(ncols)] for r in range(nrows)]).flatten()
 
 # Blues sequential ramp, colourblind-safe; force the "no data" pixels to a
 # light neutral grey rather than white so the true clipped state outline
@@ -143,12 +191,21 @@ for i, year in enumerate(YEARS):
     im = ax.imshow(total, cmap=cmap, vmin=0, vmax=VMAX,
                     extent=(left, right, bottom, top), interpolation='nearest')
     bihar_gdf.boundary.plot(ax=ax, color='#333333', linewidth=0.6)
-    ax.set_xlim(left, right)
-    ax.set_ylim(bottom, top)
+    # xlim/ylim use the padded frame computed above (same for every year,
+    # since every year clips to the same boundary); imshow's own extent
+    # above stays at the true, unpadded raster bounds. The padding strip
+    # falls outside imshow's extent, so it needs its own facecolor to
+    # match the in-raster nodata colour, or it would show through as the
+    # axes' default white instead.
+    ax.set_facecolor('#F2F2F2')
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
     # In-panel label instead of ax.set_title -- decouples the label from
     # inter-row spacing, so hspace can be tight without the label
-    # colliding with the row above.
-    ax.text(0.03, 0.96, str(year), transform=ax.transAxes, ha='left', va='top',
+    # colliding with the row above. Upper-right placement: Bihar's outline
+    # narrows toward the north-east of each panel, leaving open space there
+    # that the upper-left corner doesn't have.
+    ax.text(0.97, 0.96, str(year), transform=ax.transAxes, ha='right', va='top',
             fontsize=10, weight='bold', color='#222222')
     ax.set_xticks([])
     ax.set_yticks([])
@@ -161,40 +218,48 @@ for i, year in enumerate(YEARS):
 for j in range(len(YEARS), len(axes)):
     axes[j].axis('off')
 
-# North arrow + scale bar on the first panel only, per the plan's
-# "one north arrow and one scale bar for the whole panel" requirement.
-# In lon/lat degrees, a fixed metre distance isn't a fixed coordinate
-# span, so the scale bar's degree-length is computed from the local
-# latitude (WGS84 ~111.32 km per degree latitude, longitude scaled by
-# cos(latitude)).
-ax0 = axes[0]
-left, bottom, right, top = rasters[YEARS[0]][1]
-mid_lat = (bottom + top) / 2
-km_per_deg_lon = 111.32 * np.cos(np.radians(mid_lat))
-bar_km = 50
-bar_deg = bar_km / km_per_deg_lon
-dx = right - left
-dy = top - bottom
-bar_x0 = left + 0.06 * dx
-bar_y0 = bottom + 0.06 * dy
-ax0.plot([bar_x0, bar_x0 + bar_deg], [bar_y0, bar_y0], color='#222222', linewidth=2.5,
-          solid_capstyle='butt')
-ax0.text(bar_x0 + bar_deg / 2, bar_y0 + 0.015 * dy, f'{bar_km} km', ha='center',
-          va='bottom', fontsize=7.5, color='#222222')
-ax0.annotate('N', xy=(right - 0.08 * dx, top - 0.10 * dy),
-             xytext=(right - 0.08 * dx, top - 0.24 * dy),
-             ha='center', va='bottom', fontsize=9, weight='bold', color='#222222',
-             arrowprops=dict(arrowstyle='-|>', color='#222222', lw=1.6))
-
-cbar = fig.colorbar(im, ax=axes[:len(YEARS)], orientation='horizontal',
-                     fraction=0.035, pad=0.03, aspect=40, extend='max')
+# Single common colourbar on the right, vertical, flat ends (no pointy
+# "extend" wedge) -- the >=5 bin is instead spelled out in the top tick
+# label. orientation='vertical' rotates the label 90 degrees by default.
+# Uses its own pre-reserved `cax` (see GRID_WIDTH_FRAC/CBAR_* above)
+# instead of `ax=`, so it never resizes the panel axes.
+cax = fig.add_axes([GRID_WIDTH_FRAC + CBAR_GAP_FRAC, 0.06, CBAR_WIDTH_FRAC * 0.5, 0.88])
+cbar = fig.colorbar(im, cax=cax, orientation='vertical', extend='neither')
+cbar.set_ticks(list(range(VMAX + 1)))
+cbar.set_ticklabels([str(v) for v in range(VMAX)] + [f'≥{VMAX}'])
 cbar.set_label('Flooded observations, July-October (count)', fontsize=9)
 cbar.ax.tick_params(labelsize=8)
 
+# Single common scale bar, drawn inside the last (2025) panel's lower-right
+# corner rather than as a separate element below the grid, to avoid the
+# extra vertical space a dedicated row costs. In lon/lat degrees, a fixed
+# metre distance isn't a fixed coordinate span, so the degree-length is
+# computed from that panel's own local latitude (WGS84 ~111.32 km per
+# degree latitude, longitude scaled by cos(latitude)); the axes-fraction
+# width follows directly since imshow's extent maps linearly onto the
+# panel's 0-1 axes fraction (set_xlim exactly matches that extent).
+last_ax = axes[len(YEARS) - 1]
+bar_km = 100
+bar_deg = bar_km / km_per_deg_lon
+bar_frac = bar_deg / (xlim[1] - xlim[0])
+
+bar_x0 = 0.97 - bar_frac
+bar_y0 = 0.08
+last_ax.plot([bar_x0, bar_x0 + bar_frac], [bar_y0, bar_y0], color='#222222',
+             linewidth=2.5, solid_capstyle='butt', transform=last_ax.transAxes,
+             clip_on=False)
+for x in (bar_x0, bar_x0 + bar_frac):
+    last_ax.plot([x, x], [bar_y0 - 0.02, bar_y0 + 0.02], color='#222222',
+                 linewidth=1.2, transform=last_ax.transAxes, clip_on=False)
+last_ax.text(bar_x0 + bar_frac / 2, bar_y0 + 0.03, f'{bar_km} km', ha='center',
+             va='bottom', fontsize=8, color='#222222', transform=last_ax.transAxes,
+             clip_on=False)
+
 os.makedirs(OUT_DIR, exist_ok=True)
-pdf_path = os.path.join(OUT_DIR, 'fig_bihar_floods.pdf')
 png_path = os.path.join(OUT_DIR, 'fig_bihar_floods.png')
-fig.savefig(pdf_path, bbox_inches='tight')
 fig.savefig(png_path, dpi=300, bbox_inches='tight')
-print(f'Wrote {pdf_path}')
 print(f'Wrote {png_path}')
+
+print(f'panel xlim={xlim} ylim={ylim} (padded {PAD_KM} km; raw data bounds '
+      f'were ({raw_left:.4f}, {raw_right:.4f}) / ({raw_bottom:.4f}, {raw_top:.4f}), '
+      f'same for every year)')
