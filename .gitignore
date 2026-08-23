@@ -28,3 +28,17 @@ output/
 resources/slope/
 scratch_quebracho_test/
 scripts/logs/
+
+# Pipeline-produced data files, wherever they land -- rasters, NetCDF
+# baselines/slope, mosaic VRTs, and the scene-lookup JSON caches
+# (*_dry_aoi_scene.json etc.). Does NOT cover the small, deliberately
+# committed vector resources (resources/india_utm_fishnet*.gpkg) since
+# those aren't matched by any pattern below.
+*.tif
+*.tiff
+*.nc
+*.vrt
+*_dry_aoi_scene.json
+*_dry_scene_aoi.json
+*_wet_aoi_scene.json
+*_wet_scene_aoi.json
