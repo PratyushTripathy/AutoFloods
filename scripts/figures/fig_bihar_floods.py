@@ -41,15 +41,16 @@ require_boundaries()
 OUT_DIR = '/home/emlab/projects/current-projects/edge-autofloods/autofloods-manuscript/figures'
 MOSAIC_DIR = '/home/emlab/projects/current-projects/edge-autofloods/AutoFloods/output/bihar_opera_30m'
 YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
-DOWNSAMPLE_FACTOR = 4
+TARGET_RESOLUTION_M = 300  # display resolution; coarsened via mean, not decimation
 VMAX = 5  # fixed colour-scale ceiling (not data-driven), per manuscript style decision
 DISPLAY_CRS = 'EPSG:4326'  # WGS84 -- display only; area stats (Figure 4) use Mollweide
+NAN_SENTINEL = -9999.0  # float nodata; averaging produces fractional values, not counts
 
 plt.rcParams['font.family'] = 'DejaVu Sans'
 plt.rcParams['font.size'] = 9
 
 
-def load_year_total(year, bihar_geom_native, nodata_out=255):
+def load_year_total(year, bihar_geom_native):
     path = os.path.join(MOSAIC_DIR, str(year), f'{year}_mosaic.tif')
     with rasterio.open(path) as src:
         # Clip to the Bihar cutline FIRST, in the mosaic's native CRS (full
@@ -59,41 +60,51 @@ def load_year_total(year, bihar_geom_native, nodata_out=255):
         nodata = src.nodata
         src_crs = src.crs
 
-    # Downsample (still in native CRS) before the WGS84 warp, purely to
-    # keep the warp cheap -- small multiples don't need full-res input.
-    out_h = clipped.shape[1] // DOWNSAMPLE_FACTOR
-    out_w = clipped.shape[2] // DOWNSAMPLE_FACTOR
-    down = np.empty((clipped.shape[0], out_h, out_w), dtype=clipped.dtype)
+    # Coarsen to TARGET_RESOLUTION_M via MEAN (not nearest-neighbour
+    # decimation, which silently drops 15 of every 16 source pixels --
+    # `average` resampling genuinely averages every valid pixel in each
+    # output cell, and GDAL excludes nodata pixels from that average
+    # rather than corrupting it, since src_nodata is set below).
+    clip_h, clip_w = clipped.shape[1], clipped.shape[2]
+    clip_bounds = rasterio.transform.array_bounds(clip_h, clip_w, clipped_transform)
+    clip_width_m = clip_bounds[2] - clip_bounds[0]
+    clip_height_m = clip_bounds[3] - clip_bounds[1]
+    out_w = max(1, round(clip_width_m / TARGET_RESOLUTION_M))
+    out_h = max(1, round(clip_height_m / TARGET_RESOLUTION_M))
+
+    down = np.full((clipped.shape[0], out_h, out_w), NAN_SENTINEL, dtype=np.float32)
     for b in range(clipped.shape[0]):
         with rasterio.io.MemoryFile() as memfile:
             profile = {
                 'driver': 'GTiff', 'dtype': clipped.dtype, 'count': 1, 'nodata': nodata,
-                'height': clipped.shape[1], 'width': clipped.shape[2],
+                'height': clip_h, 'width': clip_w,
                 'transform': clipped_transform, 'crs': src_crs,
             }
             with memfile.open(**profile) as tmp:
                 tmp.write(clipped[b], 1)
-                down[b] = tmp.read(1, out_shape=(out_h, out_w),
-                                    resampling=rasterio.enums.Resampling.nearest)
-    down_transform = clipped_transform * clipped_transform.scale(
-        clipped.shape[2] / out_w, clipped.shape[1] / out_h)
+                masked = tmp.read(1, out_shape=(out_h, out_w), masked=True,
+                                   resampling=rasterio.enums.Resampling.average)
+                down[b] = masked.astype(np.float32).filled(NAN_SENTINEL)
+    down_transform = clipped_transform * clipped_transform.scale(clip_w / out_w, clip_h / out_h)
 
-    # Reproject to WGS84 for display.
+    # Reproject to WGS84 for display (mean resampling again, for the same
+    # reason -- the data is already continuous after averaging above, so
+    # this just avoids re-introducing nearest-neighbour dropout).
     dst_transform, dst_w, dst_h = rasterio.warp.calculate_default_transform(
         src_crs, DISPLAY_CRS, out_w, out_h, *rasterio.transform.array_bounds(out_h, out_w, down_transform))
-    data = np.full((down.shape[0], dst_h, dst_w), nodata_out, dtype=np.uint8)
+    data = np.full((down.shape[0], dst_h, dst_w), NAN_SENTINEL, dtype=np.float32)
     for b in range(down.shape[0]):
         rasterio.warp.reproject(
             source=down[b], destination=data[b],
-            src_transform=down_transform, src_crs=src_crs, src_nodata=nodata,
-            dst_transform=dst_transform, dst_crs=DISPLAY_CRS, dst_nodata=nodata_out,
-            resampling=rasterio.warp.Resampling.nearest)
+            src_transform=down_transform, src_crs=src_crs, src_nodata=NAN_SENTINEL,
+            dst_transform=dst_transform, dst_crs=DISPLAY_CRS, dst_nodata=NAN_SENTINEL,
+            resampling=rasterio.warp.Resampling.average)
     bounds = rasterio.transform.array_bounds(dst_h, dst_w, dst_transform)
 
-    valid = data[0] != nodata_out
+    valid = data[0] != NAN_SENTINEL
     total = np.zeros(data.shape[1:], dtype=np.float32)
     for b in range(data.shape[0]):
-        band_valid = data[b] != nodata_out
+        band_valid = data[b] != NAN_SENTINEL
         total[band_valid] += data[b][band_valid]
     total[~valid] = np.nan
     return total, bounds
@@ -116,7 +127,7 @@ sample_h, sample_w = rasters[YEARS[0]][0].shape
 panel_aspect = sample_h / sample_w
 fig, axes = plt.subplots(nrows, ncols, figsize=(9.5, 9.5 / ncols * panel_aspect * nrows))
 axes = axes.flatten()
-plt.subplots_adjust(wspace=0.03, hspace=0.22)
+plt.subplots_adjust(wspace=0.02, hspace=0.06)
 
 # Blues sequential ramp, colourblind-safe; force the "no data" pixels to a
 # light neutral grey rather than white so the true clipped state outline
@@ -134,7 +145,11 @@ for i, year in enumerate(YEARS):
     bihar_gdf.boundary.plot(ax=ax, color='#333333', linewidth=0.6)
     ax.set_xlim(left, right)
     ax.set_ylim(bottom, top)
-    ax.set_title(str(year), fontsize=10, weight='bold', pad=3)
+    # In-panel label instead of ax.set_title -- decouples the label from
+    # inter-row spacing, so hspace can be tight without the label
+    # colliding with the row above.
+    ax.text(0.03, 0.96, str(year), transform=ax.transAxes, ha='left', va='top',
+            fontsize=10, weight='bold', color='#222222')
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_aspect(1 / np.cos(np.radians((bottom + top) / 2)))  # approx equirectangular at Bihar's latitude
