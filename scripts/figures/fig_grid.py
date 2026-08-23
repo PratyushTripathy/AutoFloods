@@ -76,9 +76,9 @@ for _, row in bihar_tiles.iterrows():
     axins.text(c.x, c.y, str(int(row['ID'])), ha='center', va='center',
                fontsize=6.5, color=TEXT_COLOR, weight='bold', zorder=4)
 
-ins_bounds = bihar_tiles.total_bounds  # tile grid, not the state outline -- tiles extend past Bihar's own border
-pad_x = (ins_bounds[2] - ins_bounds[0]) * 0.04
-pad_y = (ins_bounds[3] - ins_bounds[1]) * 0.04
+ins_bounds = bihar_boundary.total_bounds  # zoom to Bihar itself, not however far the tiles happen to extend
+pad_x = (ins_bounds[2] - ins_bounds[0]) * 0.08
+pad_y = (ins_bounds[3] - ins_bounds[1]) * 0.08
 axins.set_xlim(ins_bounds[0] - pad_x, ins_bounds[2] + pad_x)
 axins.set_ylim(ins_bounds[1] - pad_y, ins_bounds[3] + pad_y)
 axins.set_xticks([])
