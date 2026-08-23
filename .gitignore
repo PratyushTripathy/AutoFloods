@@ -2,9 +2,29 @@
 doc/_build/
 .buildinfo
 
+# Quarto documentation (quartodocs/) build artifacts
+quartodocs/_site/
+quartodocs/.quarto/
+quartodocs/reference/
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
 __pycache__/
 *.xml
 .DS_Store
+
+# packaging build artifacts
+*.egg-info/
+build/
+dist/
+
+# Boundary files for figure generation (scripts/figures/fig_grid.py,
+# fig_bihar_floods.py) -- not vendored, see scripts/figures/_boundaries.py
+resources/boundaries/
+
+# Pipeline outputs, caches, and scratch/log dirs -- not code, not vendored
+output/
+resources/slope/
+scratch_quebracho_test/
+scripts/logs/

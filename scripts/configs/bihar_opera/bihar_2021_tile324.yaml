@@ -1,0 +1,31 @@
+aoi:
+  grid_shapefile: /home/emlab/projects/current-projects/edge-autofloods/AutoFloods/resources/india_utm_fishnet_buffer.gpkg
+  grid_id_list: [324]
+  dry_date_col: dry_month
+  id_col: ID
+
+dates:
+  dry_years: [2021, 2021]
+  wet_duration: ['2021/07', '2021/10']
+
+source:
+  type: opera
+
+detector:
+  type: zscore
+
+detection:
+  vv_thd: -2.5
+  vh_thd: -2.5
+  rel_slope_thd: 20
+
+read:
+  overview_level: null
+  max_workers: 6
+
+slope:
+  dem_overview: 0
+  buffer: 500
+
+output_dir: /home/emlab/projects/current-projects/edge-autofloods/AutoFloods/output/bihar_opera_30m/2021
+slope_dir: /home/emlab/projects/current-projects/edge-autofloods/AutoFloods/resources/slope

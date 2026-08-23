@@ -1,0 +1,50 @@
+# Example config for scripts/run_autofloods.py (python scripts/run_autofloods.py --config <this file>).
+# Equivalent to scripts/bihar2024_tile_opera.py, generalized to any AOI list from a config
+# file instead of a hand-written script. That script remains the tested, unmodified
+# reference implementation; this config reproduces the same settings.
+
+aoi:
+  grid_shapefile: /home/emlab/projects/current-projects/edge-autofloods/AutoFloods/resources/india_utm_fishnet_buffer.gpkg
+  grid_id_list: [321]          # one or more tile IDs; each is processed through the full pipeline in turn
+  dry_date_col: dry_month
+  id_col: ID
+
+dates:
+  dry_years: [2024, 2024]
+  wet_duration: ['2024/07', '2024/10']
+
+source:
+  type: opera                  # mpc | opera
+
+detector:
+  type: zscore                 # currently the only implemented backend
+
+detection:
+  vv_thd: -2.5
+  vh_thd: -2.5
+  rel_slope_thd: 20
+
+read:
+  overview_level: null         # ignored by OPERASource (no internal pyramid); set an int (e.g. 0) for MPC
+  max_workers: 6                # DOWNLOAD concurrency (network-bound, tuned against the data source's own
+                                 # rate tolerance -- validated for OPERA: 68/68 passes, 5.9 min, no throttling).
+                                 # NOT derived from CPU count on purpose -- a fast multi-core machine on a
+                                 # rate-limited connection still needs a modest, source-tuned value here.
+  reproject_max_workers: null   # CPU-BOUND reprojection concurrency (dry+wet season reproject/clip/stack).
+                                 # null (default) resolves to (available CPUs - 1) on whatever machine this
+                                 # runs on (utils.default_max_workers) -- set an int to override, e.g. if
+                                 # running alongside other CPU-heavy jobs on the same node.
+
+slope:
+  dem_overview: 0
+  buffer: 500
+  max_workers: 6                 # DEM tile download concurrency (network-bound, same rationale as read.max_workers)
+
+output_dir: /home/emlab/projects/current-projects/edge-autofloods/AutoFloods/output/bihar_2024_opera_30m
+slope_dir: /home/emlab/projects/current-projects/edge-autofloods/AutoFloods/resources/slope
+
+cell_size: 30   # meters, in each tile's own local UTM zone -- the FORCED grid resolution every
+                # reprojection in the pipeline is resampled onto (not derived from any scene's own
+                # metadata, so a tile's grid is identical across every run/year regardless of which
+                # scenes produced it). Default matches OPERA RTC-S1's native resolution. Set to 20 for
+                # an MPC run at a 20m overview level, or any other value matching a different source.

@@ -1,0 +1,62 @@
+---
+title: "AutoFloods"
+---
+
+## Overview
+
+AutoFloods is a Python package for automated, large-area flood mapping
+from Sentinel-1 SAR imagery. It detects flooded pixels with per-pixel
+Z-score anomaly detection: a dry-season VV/VH backscatter baseline (mean
++ standard deviation) is fit per tile, and wet-season scenes are flagged
+flooded wherever backscatter drops significantly below that baseline,
+with a terrain-slope mask to suppress false positives on steep ground.
+
+To scale to large areas reliably, the workflow processes one AOI
+("tile") at a time rather than one country- or state-scale mosaic --
+see `flood_mapper` in the [API reference](reference/index.qmd) for the
+per-tile pipeline this drives.
+
+## Data sources
+
+AutoFloods reads Sentinel-1 RTC (radiometrically terrain corrected)
+imagery through a pluggable `STACSource` interface, with two
+implementations:
+
+- **`MPCSource`** -- Microsoft Planetary Computer, the original backend.
+- **`OPERASource`** -- NASA's OPERA RTC-S1 product via ASF/CMR, hosted on
+  AWS. Native 30m resolution; reads via a download-then-open pattern
+  rather than streaming, which has proven substantially more reliable
+  under sustained/concurrent load in this project's own testing.
+
+Swap between them (or add a new source) via the `source=` argument to
+`flood_mapper` -- see [Getting Started](getting-started.qmd).
+
+## Installation
+
+```bash
+pip install -e .
+```
+
+See `pyproject.toml` for the pinned dependency list. `MPCSource` needs no
+credentials for typical use (a subscription key is optional, raising the
+request rate limit); `OPERASource` requires a NASA Earthdata Login entry
+in `~/.netrc`.
+
+## Citation
+
+If you use this package (or part of it), please cite:
+
+> Tripathy, P. and Malladi, T. (2021). Global Flood Mapper: Democratising
+> open EO resources for flood mapping. *EGU General Assembly 2021*,
+> online, 19-30 Apr 2021, EGU21-16194.
+> <https://doi.org/10.5194/egusphere-egu21-16194>
+
+> Tripathy, P. & Malladi, T. (2022). Global Flood Mapper: a novel Google
+> Earth Engine application for rapid flood mapping using Sentinel-1 SAR.
+> *Natural Hazards*. <https://doi.org/10.1007/s11069-022-05428-2>
+
+## Affiliation & funding
+
+MapSolve AI Pvt. Ltd., India, and University of California, Santa
+Barbara, United States. Completed with support from the Group on Earth
+Observation (GEO)-Microsoft Planetary Computer Grant.

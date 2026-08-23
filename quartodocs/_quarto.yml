@@ -1,0 +1,76 @@
+project:
+  type: website
+  output-dir: _site
+
+website:
+  title: "AutoFloods"
+  description: "Automated Sentinel-1 SAR flood mapping at scale, via Z-score thresholding."
+  navbar:
+    left:
+      - href: index.qmd
+        text: Overview
+      - href: getting-started.qmd
+        text: Getting Started
+      - href: reference/index.qmd
+        text: API Reference
+    right:
+      - icon: github
+        href: https://github.com/
+  sidebar:
+    style: docked
+    contents:
+      - index.qmd
+      - getting-started.qmd
+      - section: "API Reference"
+        contents:
+          - reference/index.qmd
+
+format:
+  html:
+    theme: cosmo
+    toc: true
+
+quartodoc:
+  package: autofloods
+  dir: reference
+  title: API Reference
+  sections:
+    - title: "Pipeline orchestrator"
+      desc: "The main entry point most users need."
+      contents:
+        - flood_mapper
+    - title: "Data sources"
+      desc: "STACSource and its implementations -- how AutoFloods reads Sentinel-1/DEM data."
+      contents:
+        - sources.STACSource
+        - sources.MPCSource
+        - sources.OPERASource
+    - title: "Flood detectors"
+      desc: "FloodDetector and its implementations -- the classification method."
+      contents:
+        - detectors.FloodDetector
+        - detectors.ZScoreDetector
+    - title: "Preprocessing"
+      desc: "Reprojection, clipping, stacking, slope."
+      contents:
+        - preprocessing.read_sentinel1_stac
+        - preprocessing.reproject_clip_stac
+        - preprocessing.stack_images
+        - preprocessing.clip_xarray_using_id
+        - preprocessing.smoothen_slope
+    - title: "Postprocessing"
+      desc: "Polygonization and monthly aggregation."
+      contents:
+        - postprocessing.polygonize_flood_raster
+        - postprocessing.flood_duration_count
+        - postprocessing.aggregate_monthly
+    - title: "Utilities"
+      desc: "Raster I/O, date handling, STAC search helpers."
+      contents:
+        - utils.open_rasterio_with_retry
+        - utils.export_xarray
+        - utils.date_range
+        - utils.string_to_date_range
+        - utils.gpd_to_json
+        - utils.decibel_to_linear
+        - utils.linear_to_decibel

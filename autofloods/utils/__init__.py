@@ -1,10 +1,12 @@
 # autofloods/utils/__init__.py
 
 # import required libraries
-import datetime, glob, os
+import datetime, glob, os, re
+import logging
+import time
+import concurrent.futures
 import pandas as pd
 import geopandas as gpd
-from ..authenticate import sign_in
 import rasterio
 from shapely.geometry import Polygon
 import rioxarray
@@ -12,31 +14,139 @@ from rioxarray import merge as rioxarray_merge
 import numpy as np
 import xarray as xr
 
+logger = logging.getLogger(__name__)
+
 # DEFINE constants
 #INDIA_GRID_SHAPEFILE_PATH = r'resources/india_utm_fishnet.gpkg'
-CATALOG = sign_in()
+# NOTE: no module-level auth/catalog global here anymore. Data-source
+# access (search, DEM, signing) now goes through autofloods.sources.STACSource
+# implementations (see autofloods.sources.MPCSource), constructed and
+# authenticated lazily on first use rather than at import time.
+
+# Bounded GDAL HTTP timeout/retry policy for reading remote rasters (COGs).
+# Without this, GDAL's default HTTP behavior has no bounded timeout, so a
+# stalled connection to a remote asset (e.g. an MPC/Azure Blob Storage href)
+# can hang a job indefinitely, consuming near-zero CPU the whole time --
+# this is what actually happened to job 1078026 (58 minutes of silence,
+# then all its output appeared in the last ~20 seconds before the SLURM
+# time limit killed it).
+GDAL_HTTP_ENV = dict(
+    GDAL_HTTP_CONNECTTIMEOUT=15,
+    GDAL_HTTP_TIMEOUT=30,
+    GDAL_HTTP_MAX_RETRY=3,
+    GDAL_HTTP_RETRY_DELAY=5,
+)
+
+
+def default_max_workers():
+    """
+    Default thread pool size for CPU-bound concurrent per-scene
+    reprojection (see preprocessing.reproject_clip_stac/stack_images,
+    flood_mapper.prepare_wet_scenes) when the caller doesn't specify one
+    explicitly: (available CPUs - 1), leaving one CPU as headroom for the
+    main thread/OS/other work on the node, rather than a number hardcoded
+    for one particular cluster's job size.
+
+    Prefers SLURM_CPUS_PER_TASK -- the actual per-job CPU allocation on a
+    shared cluster node -- over os.cpu_count(), which reports the WHOLE
+    NODE's CPU count under SLURM regardless of --cpus-per-task (e.g. 72
+    on a shared node even for an 8-CPU job; this mismatch was found while
+    benchmarking this exact parallelization change). Falls back to
+    os.cpu_count() when not running under SLURM (e.g. a laptop or a
+    non-SLURM server), so this works as a sensible default on any system,
+    not just this project's own cluster.
+    """
+    ncpu = int(os.environ.get('SLURM_CPUS_PER_TASK', os.cpu_count() or 1))
+    return max(1, ncpu - 1)
+
+
+def open_rasterio_with_retry(href, overview_level=None, masked=True, max_attempts=5, backoff_seconds=20):
+    """
+    Open a (possibly remote) raster with rioxarray, under a bounded GDAL
+    HTTP timeout/retry policy (see GDAL_HTTP_ENV) plus an application-level
+    retry loop on top, so a single stalled or transiently-failed request
+    doesn't hang or kill an entire tile-year job.
+
+    Parameters
+    ----------
+    href            : str or callable
+                      URL or path to open. Pass a zero-arg callable instead
+                      of a plain string when the href can go stale between
+                      attempts (e.g. a time-limited signed URL) -- it is
+                      called again before every attempt, including the
+                      first, so each attempt gets a freshly-minted href
+                      rather than retrying the same one that may have
+                      expired while earlier attempts were retrying (see
+                      MPCSource.read_vv_vh, which hit exactly this: a SAS
+                      token signed once up front expired mid-retry-loop on
+                      slow native-resolution reads under bounded worker
+                      concurrency, so every subsequent attempt retried an
+                      already-expired token and never had a chance to
+                      succeed). A plain string is still accepted for hrefs
+                      that don't expire (e.g. OPERASource's local VRT
+                      paths) and is used as-is on every attempt.
+    overview_level  : int or None
+                      Passed through to rioxarray.open_rasterio if given.
+    masked          : bool
+                      Passed through to rioxarray.open_rasterio.
+    max_attempts    : int
+                      Number of attempts before raising the last error.
+    backoff_seconds : int
+                      Delay between attempts.
+
+    Returns
+    -------
+    xarray.DataArray
+    """
+    last_exc = None
+    for attempt in range(1, max_attempts + 1):
+        attempt_href = href() if callable(href) else href
+        try:
+            with rasterio.Env(**GDAL_HTTP_ENV):
+                kwargs = {'masked': masked}
+                if overview_level is not None:
+                    kwargs['overview_level'] = overview_level
+                # rioxarray.open_rasterio() returns a lazy handle -- the
+                # actual pixel data isn't fetched until something forces
+                # it (e.g. decibel_to_linear()'s arithmetic much later,
+                # possibly on a different thread). A transient read
+                # failure at that point (e.g. a dropped connection
+                # mid-transfer -- TIFFFillTile: got 0 bytes, expected N)
+                # would happen entirely outside this function's retry
+                # loop and go unretried. Force the read here, inside the
+                # loop, so transient failures are caught and retried
+                # exactly like a failed open() would be.
+                da = rioxarray.open_rasterio(attempt_href, **kwargs)
+                return da.load()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_attempts:
+                # Exponential backoff (20s, 40s, 80s, 160s...) rather than
+                # a flat delay -- a wave of many 403s across many
+                # concurrent tiles in a short window looks like MPC-side
+                # throttling under heavy anonymous load, not a one-off
+                # blip, so a longer runway between attempts gives a real
+                # throttle window a chance to clear instead of just
+                # hammering it again 10-20s later.
+                wait = backoff_seconds * (2 ** (attempt - 1))
+                logger.warning(
+                    f"Attempt {attempt}/{max_attempts} to open {attempt_href} failed "
+                    f"({exc!r}); retrying in {wait}s."
+                )
+                time.sleep(wait)
+            else:
+                logger.warning(
+                    f"Attempt {attempt}/{max_attempts} to open {attempt_href} failed "
+                    f"({exc!r}); giving up."
+                )
+    raise last_exc
 
 
 # this function creates python datetime objects using a given date and number of days to advance
 def date_range(start, days):
     """
-    Generate a Date Range
-
-      This function takes a start date and a number of days, and generates a date range
-      that includes the start date and the specified number of days.
-
-    Parameters:
-          start (str): The start date in the format 'dd/mm/yyyy'.
-          days (int): The number of days to generate in the date range.
-
-    Returns:
-          tuple: A tuple containing the minimum and maximum dates in the generated range.
-
-    Example:
-          >>> start_date = '01/08/2023'
-          >>> num_days = 10
-          >>> date_min, date_max = date_range(start_date, num_days)
-
+    Inclusive [start, start + days] range, e.g. date_range('01/08/2023', 10)
+    covers Aug 1-11. `start` is 'dd/mm/yyyy'.
     """
     temp_date = pd.date_range(datetime.datetime.strptime(start, '%d/%m/%Y'), periods=days+1, freq='D')
 
@@ -46,14 +156,10 @@ def date_range(start, days):
 # define a function to format string correctly and create date range
 def string_to_date_range(start, end):
     """
-    Convert Start and End Strings to Date Range
-
-    Converts start and end date strings to a date range.
-
-    :param start: Start date (format 'dd/mm/yyyy').
-    :param end: End date (format 'dd/mm/yyyy').
-    :return: Tuple (start date, end date).
-
+    Expand 'yyyy/mm' month strings into a (first day, last day) date range,
+    e.g. ('2024/07', '2024/07') -> (2024-07-01, 2024-07-31). Handles
+    December correctly (end_month % 12 + 1 wraps to January of the next
+    calendar year to compute the day count, not the returned date itself).
     """
     start_year, start_month = start.split('/')
     end_year, end_month = end.split('/')
@@ -68,18 +174,21 @@ def string_to_date_range(start, end):
 # define a function to get bounding box as json from a shapefile using GeoPandas
 def gpd_to_json(id_list, infile, separate=True, id_key='ID', zone_key='zone', buffer=None):
     """
-    Converts selected polygons from a GeoDataFrame to GeoJSON format.
+    Read `infile`, filter to `id_list`, and return each polygon's bounding
+    box (not its exact shape) as a GeoJSON-like dict -- the shape a
+    STACSource.search_sentinel1()/search_dem() call expects for its bbox.
 
-    This function reads a shapefile using GeoPandas, filters the polygons based on the provided ID list,
-    and then generates GeoJSON representations of the filtered polygons' bounding boxes.
-    :param id_list: A list of IDs to filter the polygons in the GeoDataFrame.
-    :param infile: The path to the input shapefile. Default is INDIA_GRID_SHAPEFILE_PATH.
-    :param separate: If True, each polygon's bounding box will be generated separately in GeoJSON.
-                                  If False, a single bounding box covering all filtered polygons will be generated.
-                                  Default is True.
-    :param id_key: The key representing the ID field in the GeoDataFrame. Default is 'ID'.
-    :return:  list: A list of dictionaries representing GeoJSON polygons.
+    separate=False collapses every matched polygon into one combined
+    bbox instead of one per polygon, with a placeholder `id_key` of 1 --
+    used to build a single search area covering several AOIs at once
+    (see flood_mapper.aoi_union). separate=True (default) is one bbox per
+    AOI, each tagged with its real ID and UTM zone.
 
+    buffer, if given, is applied in the tile's own UTM zone (meters) before
+    reprojecting back to WGS84 -- used only for DEM download, where slope
+    needs a slightly larger footprint than the AOI itself so the edge
+    pixels of the kernel-based slope calculation aren't starved of
+    neighbors.
     """
     # create GeoJSON using the bounds
     def get_bbox(bbox):
@@ -146,56 +255,22 @@ def gpd_to_json(id_list, infile, separate=True, id_key='ID', zone_key='zone', bu
 # define a function to search for Sentinel-1 data
 def search_sentinel_data(bbox, start_date=None, end_date=None):
     """
-    Search for Sentinel-1 data within a specified time range and bounding box of interest.
-
-    Parameters:
-    -----------
-    bbox              : Dictionary
-                        The bounding box of interest in GeoJSON format, specified as a dictionary.
-                        
-    start_date        : Datetime object
-                        The start date of the time range to search for data.
-                        
-    end_date          : Datetime object
-                        The end date of the time range to search for data.
-
-    Returns:
-    --------
-    results           : list
-                        A list of pystac.Item objects containing the searched Sentinel-1 data.
-
+    Deprecated: thin backward-compatible wrapper around
+    autofloods.sources.MPCSource().search_sentinel1(). New code should use
+    an autofloods.sources.STACSource implementation directly (autofloods
+    injects one into flood_mapper via its `source` argument) rather than
+    calling this function.
     """
-    all_results = []
+    from ..sources import MPCSource
 
-    # Define the date range using start and end datetime objects
-    date_range = f'{start_date.strftime("%Y-%m-%dT00:00:00Z")}/{end_date.strftime("%Y-%m-%dT23:59:59Z")}'
-
-    # search for Sentinel-1 scenes
-    results = CATALOG.search(
-        collections = ["sentinel-1-rtc"],
-        intersects = bbox,
-        datetime = date_range
-    )
-    
-    # select scenes that have VV and VH bands in them
-    for item in results.get_items():
-        if ('vh' in item.assets) and ('vv' in item.assets):
-            all_results.append(item)
-
-    return all_results
+    return MPCSource().search_sentinel1(bbox, start_date, end_date)
 
 ## define a function to get footprint of a given S1 item
 def s1item_footprint(item):
     """
-    Create a GeoDataFrame containing the footprint polygon of a Sentinel-1 item.
-
-    Parameters:
-    -----------
-    item: The Sentinel-1 item containing geometry information
-
-    Returns
-    _______
-    A GeoDataFrame containing the footprint polygon with the 'ID' and 'geometry' columns.
+    One-row GeoDataFrame (columns 'ID', 'geometry', CRS EPSG:4326) for a
+    STAC item's own footprint polygon -- not the AOI's. Used by
+    seggregate_sentinel_search() to test scene/AOI intersection.
     """
     polygon = Polygon(item.geometry['coordinates'][0])
 
@@ -204,24 +279,28 @@ def s1item_footprint(item):
 # define a function that calls the above function for a given ID list but separates the search items for each given ID
 def seggregate_sentinel_search(aoi_list, search_items):
     """
-    Segregate Sentinel search results based on intersecting Area of Interest (AOI) polygons.
-
-    This function takes a list of AOI polygons and a list of search items (such as Sentinel-1 scenes).
-    It identifies which search items intersect with each AOI and vice versa, creating dictionaries to store
-    this information.
+    Cross-reference search results against AOI footprints (real polygon
+    intersection, not just bbox overlap) to answer two questions at once:
+    which scenes cover each AOI, and which AOI(s) each scene covers.
+    Needed because one STAC search can span multiple AOIs at once (see
+    flood_mapper.aoi_union) whose bboxes may overlap without every scene
+    actually covering every AOI.
 
     Parameters
     -----------
-    aoi_list        : A list of AOI polygons in GeoJSON-like format.
-    search_items    : A tuple containing two lists of search items.
-                              The first list is not used in this function.
-                              The second list contains the search items (e.g., Sentinel-1 scenes) to process.
+    aoi_list        : AOI polygons in GeoJSON-like format (as returned by gpd_to_json).
+    search_items    : (unused_first_element, list_of_stac_items) -- matches the
+                      shape flood_mapper.get_s1_items() builds; only the second
+                      element is read.
 
     Returns
     -------
-    tuple           : A tuple containing two dictionaries.
-                      The first dictionary maps AOI IDs to lists of intersecting search item IDs.
-                      The second dictionary maps search item IDs to lists of intersecting AOI IDs.
+    (aoi_scene_dict, scene_aoi_dict) : aoi_scene_dict maps each AOI ID (int) to
+        the list of intersecting scene IDs; scene_aoi_dict maps each scene ID to
+        the list of intersecting AOI IDs (int). If search_items has no results
+        (e.g. every AOI's dry-season baseline was already complete, so nothing
+        needed searching), returns every AOI mapped to an empty list rather than
+        raising on pd.concat([]).
     """
     # create GDF from the AOI list
     aoi_footprints = gpd.GeoDataFrame([
@@ -229,6 +308,16 @@ def seggregate_sentinel_search(aoi_list, search_items):
         for aoi in aoi_list],
         crs='EPSG:4326'
     )
+
+    if not search_items[1]:
+        # No search results at all -- e.g. every requested AOI already had
+        # a completed dry-season baseline, so generate_dry_date_ranges()
+        # produced an empty date range and the STAC search found nothing
+        # to do (see flood_mapper.generate_dry_date_ranges). pd.concat([])
+        # below would raise "No objects to concatenate" on an empty list;
+        # every AOI simply maps to zero intersecting scenes instead.
+        empty_aoi_scene_dict = {int(row['ID']): [] for _, row in aoi_footprints.iterrows()}
+        return empty_aoi_scene_dict, {}
 
     # create GDF from the stac items list
     s1_footprints = pd.concat([s1item_footprint(item) for item in search_items[1]], axis=0)
@@ -256,25 +345,36 @@ def seggregate_sentinel_search(aoi_list, search_items):
     return aoi_scene_dict, scene_aoi_dict
 
 def query_nasadem(aoi_union_bbox):
-    # search for Sentinel-1 scenes
-    results = CATALOG.search(
-        collections=["nasadem"],
-        intersects=aoi_union_bbox
-    )
+    """
+    Deprecated: thin backward-compatible wrapper around
+    autofloods.sources.MPCSource().search_dem(). New code should use an
+    autofloods.sources.STACSource implementation directly.
+    """
+    from ..sources import MPCSource
 
-    # select scenes that have VV and VH bands in them
-    return [
-        item
-        for item in results.get_items()
-        if 'elevation' in item.assets
-           ]
+    return MPCSource().search_dem(aoi_union_bbox)
 
-def download_nasadem(bbox, overview_level=1, nodata=0.0):
-    dem_item_list = query_nasadem(bbox)
-    dem_xarray_list = [
-        rioxarray.open_rasterio(item.assets['elevation'].href, overview_level=overview_level, masked=True)
-        for item in dem_item_list
-    ]
+def download_nasadem(bbox, source, overview_level=1, nodata=0.0, max_workers=6):
+    """
+    Search + read every DEM tile covering `bbox` and mosaic them into one
+    DataArray (rioxarray_merge.merge_arrays -- last-tile-wins on overlap).
+    `nodata` is the mosaic's fill value where no DEM tile covers a pixel,
+    not a value found in the source data itself.
+
+    max_workers concurrent reads for the same I/O-bound reasons as
+    flood_mapper.read_scenes() -- see the comment there. This is a
+    network-concurrency knob (tuned against the data source's own rate
+    tolerance), not a CPU-bound one, so unlike the reprojection thread
+    pools it is NOT derived from local CPU count (utils.default_max_workers) --
+    a fast multi-core machine on a rate-limited connection still needs a
+    modest, source-tuned value here, not one that scales with cores.
+    """
+    dem_item_list = source.search_dem(bbox)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        dem_xarray_list = list(executor.map(
+            lambda item: open_rasterio_with_retry(source.dem_href(item), overview_level=overview_level, masked=True),
+            dem_item_list,
+        ))
 
     mosaic_xarray = rioxarray_merge.merge_arrays(dem_xarray_list, nodata=nodata)
 
@@ -283,21 +383,35 @@ def download_nasadem(bbox, overview_level=1, nodata=0.0):
 # define a function to export xarray.DataArray object to TIFF file
 def export_xarray(xarray_data, filename, bandnames=None):
     """
-    Export Xarray data as a GeoTIFF file.
+    Write a DataArray to `filename` as a Cloud Optimized GeoTIFF (COG) --
+    tiled, DEFLATE-compressed, with internal overviews auto-built by
+    GDAL's COG driver (skipped for rasters too small to benefit, which is
+    expected/harmless, not a bug). Bounds/transform are computed from
+    `xarray_data`'s own x/y coordinates. This is the single choke point
+    for every raster this package writes (slope, per-scene flood rasters,
+    merged-by-date stacks, scene counts) -- change compression/tiling
+    settings here, not per-caller.
 
-    This function takes an Xarray dataset or data array and exports it as a GeoTIFF file. It calculates
-    the bounding box and other necessary metadata from the Xarray data and writes it to the specified file.
+    Only 2D (y, x) and 3D (band, y, x) `xarray_data` is supported.
 
     Parameters
     ----------
     xarray_data                 : The Xarray dataset or data array to be exported.
     filename                    : The path and filename of the output GeoTIFF file.
-
-    Raises
-    ______
-    InputDataDimensionError     : Raised when the input data has an unexpected number of dimensions.
-
     """
+    # NOTE: only 2D/3D xarray_data is actually handled below -- other
+    # dimensionalities hit a broken error path (this print(), then a
+    # NameError on undefined rows/cols building `profile` a few lines
+    # down, not a clean exception). Not fixed here (doc-only pass); pass
+    # exactly 2D or 3D data.
+    # Ensure the output directory exists rather than assuming it does --
+    # a fresh/rebuilt output tree, or a resumed run whose output_dir
+    # moved, shouldn't crash here with a bare "No such file or directory"
+    # from GDAL.
+    out_dir = os.path.dirname(filename)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+
     with rasterio.Env():
         xmin, ymin, xmax, ymax = [
             xarray_data.x.min().values,
@@ -315,13 +429,23 @@ def export_xarray(xarray_data, filename, bandnames=None):
 
         # Define the metadata for the output file
         profile = {
-            'driver': 'GTiff',
+            'driver': 'COG',
             'dtype': rasterio.float32,
             'nodata': np.nan,
             'width': cols,
             'height': rows,
             'count': xarray_data.shape[0] if len(xarray_data.dims) == 3 else 1,
-            'transform': rasterio.transform.from_bounds(xmin, ymin, xmax, ymax, cols, rows)
+            'transform': rasterio.transform.from_bounds(xmin, ymin, xmax, ymax, cols, rows),
+            # float32 data -> horizontal-differencing predictor 3 (not 2,
+            # which is for integer data and compresses float32 worse).
+            'compress': 'DEFLATE',
+            'predictor': 3,
+            # 'nearest' never introduces values outside the original data
+            # range in the overview pyramid -- a safe default across every
+            # caller of this function, whether the array is continuous
+            # (slope, mean/std) or effectively categorical (flood class
+            # rasters, scene counts), without needing per-caller tuning.
+            'overview_resampling': 'nearest',
         }
 
         with rasterio.open(
@@ -345,35 +469,15 @@ def export_xarray(xarray_data, filename, bandnames=None):
 # define a function to convert numpy array to xarray object using a reference xarray object
 def numpy_to_xarray(numpy_data, ref_xarray):
     """
-    Create an xarray DataArray from a NumPy array using coordinates and geospatial information from a reference xarray object.
-    If the input NumPy array is 3D, bands are added to the xarray object with names 'Band1', 'Band2', and so on.
-
-    Parameters
-    ----------
-    numpy_data : numpy.ndarray
-        The NumPy array to be converted to an xarray DataArray.
-    ref_xarray : xarray.DataArray
-        The reference xarray object containing geospatial information.
-
-    Returns
-    -------
-    xarray.DataArray
-        An xarray DataArray created from the NumPy array with coordinates and geospatial information aligned with the reference xarray.
-
-    Raises
-    ------
-    ValueError
-        If the spatial dimensions of the input NumPy array do not match the dimensions of the reference xarray object.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import xarray as xr
-    >>> import rioxarray
-    >>> # Assuming numpy_data is your NumPy array and ref_xarray is your reference xarray object
-    >>> xarray_data = numpy_to_xarray(numpy_data, ref_xarray)
+    Wrap a plain NumPy array (2D, or 3D as band-first) in a georeferenced
+    DataArray, copying CRS/transform/coords/attrs from `ref_xarray`. Used
+    after a NumPy-level computation (e.g. slope, a detector's raw output)
+    needs to become a proper raster again. `numpy_data`'s spatial shape
+    must match `ref_xarray`'s -- this does not resample or reproject.
+    3D input gets auto-named bands ('Band1', 'Band2', ...); pass real
+    names via export_xarray()'s `bandnames` at write time instead if
+    that matters for the output file.
     """
-
     # Validate spatial dimensions
     if len(numpy_data.shape) not in [2, 3]:
         raise ValueError("Input NumPy array must be 2D or 3D.")
@@ -399,6 +503,21 @@ def numpy_to_xarray(numpy_data, ref_xarray):
 
 # define a function to merge the exported flood extent file using date
 def merge_flood_gdfs(flood_dir, date_index=5, delimiter='_'):
+    """
+    Merge every per-scene flood-vector .gpkg in `flood_dir` into one
+    dissolved-by-(tile, date) GeoDataFrame per tile, written to
+    '<flood_dir with flood_vector -> final_output>/{dry_years}_{tile_id}_FloodExtent.gpkg'.
+
+    NOTE: `date_index`/`delimiter` parse the date and tile ID out of each
+    filename by fixed underscore-position (tokens [4] and [5]), matching
+    MPC-sourced scene ID naming only -- unlike combine_flood_dates()
+    elsewhere in this module, this function was not updated for OPERA's
+    shorter "OPERA_PASS_{date}"-derived filenames and will likely mis-parse
+    or throw an IndexError on them. Not currently exercised by the
+    production OPERA path (map_floods()'s export_vector defaults to False),
+    but fix this the same way as _extract_date_token() before enabling
+    vector export against OPERA output.
+    """
     # get the list of files present in the directory
     files_list = glob.glob(f'{flood_dir}/*.gpkg')
 
@@ -434,21 +553,74 @@ def merge_flood_gdfs(flood_dir, date_index=5, delimiter='_'):
 
 
 def decibel_to_linear(decibels):
+    """dB -> linear power. Sentinel-1 RTC backscatter is stored in dB;
+    the Z-score baseline (mean/std) is computed in linear units, since
+    averaging in dB (a log scale) would bias the mean. See linear_to_decibel
+    for the inverse, used only for display (e.g. plotting VV/VH imagery)."""
     return 10 ** (decibels / 10)
 
 
 def linear_to_decibel(linear):
+    """Linear power -> dB. Inverse of decibel_to_linear(); use for display
+    only -- the pipeline itself works in linear units end to end."""
     return 10 * np.log10(linear)
 
 
+_DATE_TOKEN_RE = re.compile(r'^\d{8}')
+
+
+def _extract_date_token(key, date_index=-5):
+    """
+    Extract the YYYYMMDD date from a scene/pass ID or filename.
+
+    Tries date_index first -- this matches MPC's underscore-separated
+    token layout (..._{YYYYMMDDTHHMMSS}_...) positionally, and is kept as
+    the first attempt so MPC's well-tested behavior is completely
+    unchanged. Falls back to scanning all underscore-separated tokens for
+    the first one starting with 8 digits when date_index is out of range
+    or doesn't land on a date-shaped token -- this covers OPERA's shorter
+    "OPERA_PASS_{YYYYMMDD}" IDs (3 tokens; -5 is out of range for them)
+    without threading per-source ID-shape knowledge into this function.
+    """
+    tokens = key.split('_')
+    if -len(tokens) <= date_index < len(tokens):
+        candidate = tokens[date_index]
+        if _DATE_TOKEN_RE.match(candidate):
+            return candidate[:8]
+    for token in tokens:
+        if _DATE_TOKEN_RE.match(token):
+            return token[:8]
+    raise ValueError(f"Could not find an 8-digit date token in {key!r}")
+
+
 def combine_flood_dates(flood_data, date_index=-5):
+    """
+    Collapse same-date scenes into one flood layer per date, taking the
+    per-pixel maximum across scenes (np.maximum.reduce) -- so a pixel
+    flagged flooded (class 3, see detectors.ZScoreDetector) by ANY scene
+    on a given date stays flooded in that date's combined layer, even if
+    other same-date scenes disagree.
+
+    Parameters
+    ----------
+    flood_data : dict[str, xarray.DataArray] or list[str]
+        Either {scene_id: classified_array} (in-memory, from map_floods()),
+        or a list of paths to already-exported classified .tif files.
+    date_index : int
+        Passed through to _extract_date_token() -- see its docstring for
+        how the date is located in each key/filename.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray] : YYYYMMDD date -> combined 2D array.
+    """
     data_dict = None
 
     # the input flood data can either be a dictionary of xarray objects
     if type(flood_data) == type(dict()):
         unique_dates = sorted(set(
             [
-                key.split('_')[date_index][:8]
+                _extract_date_token(key, date_index)
                 for key in flood_data
                 ]
         ))
@@ -457,7 +629,7 @@ def combine_flood_dates(flood_data, date_index=-5):
             u_date: np.maximum.reduce([
                 flood_data[key].to_numpy()
                 for key in flood_data
-                if key.split('_')[date_index][:8] == u_date
+                if _extract_date_token(key, date_index) == u_date
             ])
             for u_date in unique_dates
         }
@@ -468,7 +640,7 @@ def combine_flood_dates(flood_data, date_index=-5):
     elif type(flood_data) == type(list()):
         unique_dates = sorted(set(
             [
-                file.split('_')[date_index][:8]
+                _extract_date_token(file, date_index)
                 for file in flood_data
                 ]
         ))
@@ -477,7 +649,7 @@ def combine_flood_dates(flood_data, date_index=-5):
             key: np.maximum.reduce([
                 rasterio.open(filepath).read(1)
                 for filepath in flood_data
-                if filepath.split('_')[date_index][:8] == key
+                if _extract_date_token(filepath, date_index) == key
             ])
             for key in unique_dates
         }
@@ -490,15 +662,11 @@ def combine_flood_dates(flood_data, date_index=-5):
 
 def flood_data_3dstack(flood_data, date_index=-5):
     """
-    This function works under the assumption that input flood data belongs to the same tile.
-
-    Args:
-        flood_data: dict or list
-
-        date_index: integer
-
-    Returns:
-
+    combine_flood_dates() + stack into one 3D array (date, y, x). Assumes
+    every entry in `flood_data` belongs to the same tile (mixed-tile input
+    will silently stack misaligned grids). Returns (dates, stack) where
+    dates[i] labels stack[i] -- see merge_floods_by_date(), the caller
+    that turns this into the DataArray written to floodextentstacked_*.tif.
     """
     # call the function that neatly combines flood maps for different dates
     data_dict = combine_flood_dates(flood_data, date_index=date_index)

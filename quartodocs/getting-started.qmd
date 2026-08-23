@@ -1,0 +1,110 @@
+---
+title: "Getting Started"
+---
+
+There are two ways to run AutoFloods: a config file + the runner script
+(fastest way to launch a real job, no code to write), or the
+`flood_mapper` class directly in a notebook/script (more control).
+
+## Option 1: config file + runner script
+
+`scripts/run_autofloods.py` is a plain script (outside the `autofloods`
+package, so it never needs installing/importing as a module) that reads
+a YAML config and drives the full pipeline for one or more AOI tiles.
+
+```bash
+python scripts/run_autofloods.py --config scripts/bihar2024_opera_config.yaml
+```
+
+A minimal config looks like this (see
+`scripts/bihar2024_opera_config.yaml` for the full example this project
+actually runs in production):
+
+```yaml
+aoi:
+  grid_shapefile: resources/india_utm_fishnet_buffer.gpkg
+  grid_id_list: [321]        # one or more tile IDs
+  dry_date_col: dry_month
+  id_col: ID
+
+dates:
+  dry_years: [2024, 2024]
+  wet_duration: ['2024/07', '2024/10']
+
+source:
+  type: opera                # mpc | opera
+
+detector:
+  type: zscore
+
+detection:
+  vv_thd: -2.5
+  vh_thd: -2.5
+  rel_slope_thd: 20
+
+read:
+  overview_level: null       # int for MPC (e.g. 0); ignored by OPERASource
+  max_workers: 6
+
+slope:
+  dem_overview: 0
+  buffer: 500
+
+output_dir: output/my_run
+slope_dir: resources/slope
+```
+
+Each AOI is skipped automatically if it already fully completed for the
+exact same `dry_years`/`wet_duration` in a prior run (see
+`flood_mapper.is_fully_processed`) -- safe to re-run the same config
+after a partial failure without redoing finished tiles.
+
+## Option 2: `flood_mapper` directly
+
+```python
+from autofloods import flood_mapper
+from autofloods.sources import OPERASource
+
+fm = flood_mapper(
+    grid_shapefile='resources/india_utm_fishnet_buffer.gpkg',
+    grid_id_list=[321],
+    dry_years=[2024, 2024],
+    slope_dir='resources/slope/',
+    wet_duration=['2024/07', '2024/10'],
+    source=OPERASource(),          # or MPCSource() (the default)
+    output_dir='output/my_run',
+)
+
+fm.get_dry_dates()
+fm.generate_dry_date_ranges()
+fm.get_s1_items(dry_wet='dry')
+fm.read_scenes(dry_wet='dry', overview_level=None, max_workers=6)
+fm.generate_mean_std_by_aoi()
+
+fm.prepare_slope(dem_overview=0, buffer=500)
+
+fm.prepare_wet_scenes(overview_level=None, max_workers=6)
+fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20,
+              export_raster=False, export_vector=False, export_maps=False)
+fm.merge_floods_by_date(export_raster=True)
+fm.generate_number_of_scenes(export_raster=True)
+fm.monthly_sum()
+```
+
+This is the exact method sequence `run_autofloods.py` drives internally
+-- see the `flood_mapper` class docstring in the [API
+reference](reference/index.qmd) for what each stage does and what it
+caches to disk.
+
+## Output
+
+For each AOI, under `output_dir/tile<id>/`:
+
+- `mean_std/` -- the dry-season Z-score baseline (NetCDF).
+- `flood_raster/floodextentstacked_<tag>/` -- one classified flood raster
+  per observed wet-season date.
+- `flood_raster/monthlyadded_<tag>/` -- per-month flood-day-count
+  rasters, the final deliverable most downstream analysis uses.
+
+All GeoTIFF output is written as Cloud Optimized GeoTIFF (tiled,
+DEFLATE-compressed, with overviews).

@@ -1,0 +1,52 @@
+# Example config for scripts/run_autofloods.py, reflecting the exact
+# settings used to generate the manuscript's 2024 Bihar results (one of
+# nine years, 2017-2025, in the full reprocess -- see
+# scripts/generate_bihar_configs.py for how the other years/tiles were
+# derived from this same pattern).
+#
+# Usage:
+#   python scripts/run_autofloods.py --config examples/bihar_2024_opera_config.yaml
+#
+# Paths below are relative to the repo root; adjust grid_shapefile,
+# slope_dir, and output_dir if running from elsewhere.
+
+aoi:
+  grid_shapefile: resources/india_utm_fishnet_buffer.gpkg
+  # All 22 tiles covering the state of Bihar. Processed one tile per
+  # flood_mapper instance / one SLURM job in production (see
+  # scripts/run_bihar_all_years.sh); listing all 22 here runs them
+  # sequentially in a single process instead.
+  grid_id_list: [274, 275, 276, 277, 313, 314, 315, 316, 317, 318, 319, 320,
+                 321, 322, 323, 324, 325, 326, 328, 329, 330, 331]
+  dry_date_col: dry_month
+  id_col: ID
+
+dates:
+  dry_years: [2024, 2024]
+  wet_duration: ['2024/07', '2024/10']
+
+source:
+  type: opera                  # mpc | opera
+
+detector:
+  type: zscore
+
+detection:
+  vv_thd: -2.5
+  vh_thd: -2.5
+  rel_slope_thd: 20
+
+read:
+  overview_level: null         # ignored by OPERASource (no internal pyramid); set an int for MPC
+  max_workers: 6                # download concurrency (network-bound)
+  reproject_max_workers: null   # null -> (available CPUs - 1); set an int to override
+
+slope:
+  dem_overview: 0
+  buffer: 500
+  max_workers: 6
+
+output_dir: output/bihar_2024
+slope_dir: resources/slope
+
+cell_size: 30   # meters, forced explicitly rather than derived from scene metadata
