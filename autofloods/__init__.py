@@ -512,8 +512,21 @@ class flood_mapper():
         AOIs reloaded from disk (load_mean_std_by_aoi()). Pixels with
         stray large sentinel values (>= 50, e.g. from an upstream nodata
         convention) are masked to NaN before fitting so they don't skew
-        the mean/std. Skips fitting entirely (mean_std_by_aoi[id] = None)
-        for a detector where requires_baseline_fitting is False.
+        the mean/std. Skips fitting entirely for a detector where
+        requires_baseline_fitting is False -- self.detector.fit_baseline()
+        is never called and no baseline .nc is written -- but
+        mean_std_by_aoi[id] is still set, to the tile's own reprojected
+        dry-season VV stack rather than a fitted baseline. This is NOT a
+        statistical baseline and no caller should read its values; it
+        exists purely because prepare_slope(), map_floods()'s slope
+        masking, merge_floods_by_date(), and generate_number_of_scenes()
+        all pull this tile-year's CRS/grid (.rio.crs, .rio.bounds(),
+        .coords, .dims) from mean_std_by_aoi[id], regardless of detector.
+        Setting it to None here (an earlier version did) satisfies the
+        "don't fit a baseline" requirement but breaks all four of those
+        on first use, since none of them actually check for None -- this
+        was dead code until OtsuDetector (the first requires_baseline_
+        fitting=False detector) exercised it.
 
         reproject_max_workers is passed through to
         preprocessing.reproject_clip_stac()/stack_images()'s thread pools
@@ -553,7 +566,16 @@ class flood_mapper():
                 for id in self.stacked_dry.keys()
             }
         else:
-            self.mean_std_by_aoi = {id: None for id in self.stacked_dry.keys()}
+            # No real baseline is fit -- fit_baseline() is never called --
+            # but downstream steps still need a CRS/grid reference for
+            # this tile-year (see this method's docstring). The tile's
+            # own reprojected dry-season VV stack already carries that
+            # grid at zero extra cost (same forced cell_size, same AOI
+            # bounds every dry scene was clipped to), so reuse it as a
+            # marker rather than inventing a second grid-reference path.
+            self.mean_std_by_aoi = {
+                id: self.stacked_dry[id]['vv_stack'] for id in self.stacked_dry.keys()
+            }
         self.stacked_dry = None
 
 
