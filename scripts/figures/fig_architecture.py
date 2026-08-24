@@ -92,12 +92,19 @@ arrow(ax, src_abs, opera, side_from='bottom', side_to='top')
 arrow(ax, src_abs, mpc, side_from='bottom', side_to='top')
 
 # --- Detector interface hierarchy (bottom-left, feeds into "detect") ---
-det_abs = box(ax, 3.55, 0.25, 2.1, 0.55, 'FloodDetector', sub='(abstract interface)',
+# Two concrete implementations, same visual treatment as OPERASource/
+# MPCSource under STACSource above -- ZScoreDetector (default; used for
+# every result in this paper) and OtsuDetector (single-scene, no
+# dry-season baseline: requires_baseline_fitting=False, the first
+# detector to exercise that flag's skip path through the orchestrator).
+det_abs = box(ax, 3.55, 0.25, 3.0, 0.55, 'FloodDetector', sub='(abstract interface)',
               color=INTERFACE, dashed=True)
 zscore = box(ax, 3.65, 1.15, 1.5, 0.62, 'ZScoreDetector', sub='Z-score\nthresholding', color=FLOW)
-future_det = box(ax, 5.35, 1.15, 1.4, 0.62, 'future detector', sub='(pluggable)',
+otsu = box(ax, 5.25, 1.15, 1.15, 0.62, 'OtsuDetector', sub='Otsu\nthresholding', color=FLOW)
+future_det = box(ax, 6.5, 1.15, 1.3, 0.62, 'future detector', sub='(pluggable)',
                   color=INTERFACE, dashed=True)
 arrow(ax, det_abs, zscore, side_from='top', side_to='bottom')
+arrow(ax, det_abs, otsu, side_from='top', side_to='bottom')
 arrow(ax, det_abs, future_det, side_from='top', side_to='bottom', color='#AAAAAA')
 
 # --- Shared pipeline, row A (top) ---
@@ -143,6 +150,7 @@ arrow(ax, boxes_a[-1], detect_box, side_from='bottom', side_to='top', color='#66
 
 # detector interfaces feed up into "detect"
 arrow(ax, zscore, detect_box, side_from='top', side_to='bottom')
+arrow(ax, otsu, detect_box, side_from='top', side_to='bottom')
 
 # --- Legend ---
 legend_elems = [
