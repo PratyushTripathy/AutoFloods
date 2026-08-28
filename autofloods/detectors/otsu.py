@@ -104,8 +104,23 @@ class OtsuDetector(FloodDetector):
         i.e. candidate water), same shape/coords as `band`. Falls back
         to all-False (logged) for any of the degenerate cases in this
         class's docstring, instead of raising.
+
+        OPERA RTC-S1 gamma0 is delivered in linear power (confirmed by
+        direct inspection: real tile 318 VV/VH values cluster near 1.0
+        with a long right tail, never negative -- not dB). Otsu
+        thresholding on SAR backscatter is conventionally done in dB:
+        linear power compresses the water and land populations into one
+        right-skewed distribution, which is exactly what this method's
+        own bimodality check is designed to reject, and does -- an
+        unguarded linear-scale threshold on real tile 318 data flagged
+        99.95% of one band as "flooded". Converting to dB restores the
+        separation the guard needs to find. Values <= 0 are not expected
+        for real gamma0 but would produce -inf under log10; they are
+        masked to NaN instead, consistent with how the rest of this
+        method treats invalid pixels.
         """
-        values = band.values
+        with np.errstate(divide='ignore', invalid='ignore'):
+            values = np.where(band.values > 0, 10 * np.log10(band.values), np.nan)
         valid = ~np.isnan(values)
         n_valid = int(valid.sum())
 
@@ -158,15 +173,38 @@ class OtsuDetector(FloodDetector):
         counts, _ = np.histogram(valid_values, bins=N_HIST_BINS)
         counts = counts.astype(float)
         if PEAK_SMOOTHING_WINDOW > 1:
+            # Edge-replicate padding before smoothing, not the zero-
+            # padding np.convolve(..., mode='same') does implicitly:
+            # zero-padding here invents a fake decline immediately past
+            # the histogram's edge, which can flatten a real tail-end
+            # mode into an exact-tie plateau (observed directly: a tight
+            # cluster concentrated in the last two bins smoothed into
+            # three bins tied at precisely the same value, and a strict
+            # local-max test finds no peak on a plateau). Edge
+            # replication assumes no such decline, which is the neutral
+            # choice when what lies beyond the observed range is
+            # actually unknown.
+            half_window = PEAK_SMOOTHING_WINDOW // 2
+            edge_padded = np.pad(counts, half_window, mode='edge')
             kernel = np.ones(PEAK_SMOOTHING_WINDOW) / PEAK_SMOOTHING_WINDOW
-            counts = np.convolve(counts, kernel, mode='same')
+            counts = np.convolve(edge_padded, kernel, mode='valid')
         if counts.max() == 0:
             return False
         min_peak_height = counts.max() * MIN_PEAK_HEIGHT_FRAC
+        # Pad with an implicit zero on each side before finding local
+        # maxima, so a real mode sitting in the first or last bin (its
+        # only neighbour is the edge of the observed range, not another
+        # bin) can still register as a peak. Without this, a two-mode
+        # histogram where one mode happens to be pinned at the range's
+        # own min/max -- which is exactly what a tight, near-saturated
+        # land cluster can look like -- was undercounted to one peak and
+        # wrongly rejected as unimodal (caught by this class's own test
+        # suite, not a hypothetical).
+        padded = np.concatenate(([0.0], counts, [0.0]))
         is_peak = (
-            (counts[1:-1] > counts[:-2])
-            & (counts[1:-1] > counts[2:])
-            & (counts[1:-1] >= min_peak_height)
+            (padded[1:-1] > padded[:-2])
+            & (padded[1:-1] > padded[2:])
+            & (padded[1:-1] >= min_peak_height)
         )
         return int(is_peak.sum()) >= 2
 

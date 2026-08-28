@@ -3,11 +3,22 @@
 """
 OtsuDetector-specific behaviour, including the degenerate cases from its
 class docstring. No network access -- every fixture is synthetic.
+
+Fixtures are built in dB, then exponentiated back to linear power
+(_db_to_linear) before being handed to the detector -- OtsuDetector's
+detect() now does its own linear-to-dB conversion internally (matching
+real OPERA RTC-S1 gamma0, which arrives in linear power; see otsu.py),
+so a synthetic fixture in raw dB values would be converted a second
+time and silently double-transformed.
 """
 import numpy as np
 import xarray as xr
 
 from autofloods.detectors import OtsuDetector
+
+
+def _db_to_linear(values_db):
+    return 10 ** (values_db / 10.0)
 
 
 def _wet_scene_from_band(band):
@@ -28,9 +39,9 @@ def test_bimodal_scene_flags_water_as_high_confidence():
     size = 200
     half = size // 2
     rng = np.random.default_rng(11)
-    land = rng.normal(-10.0, 1.0, size=(size, half))
-    water = rng.normal(-22.0, 0.5, size=(size, size - half))
-    band = np.concatenate([land, water], axis=1).astype('float32')
+    land_db = rng.normal(-10.0, 1.0, size=(size, half))
+    water_db = rng.normal(-22.0, 0.5, size=(size, size - half))
+    band = _db_to_linear(np.concatenate([land_db, water_db], axis=1)).astype('float32')
 
     detector = OtsuDetector()
     result = detector.detect(baseline=None, wet_scene=_wet_scene_from_band(band))
@@ -59,7 +70,7 @@ def test_too_few_valid_pixels_returns_all_zero_not_an_exception():
     # specifically, distinct from the all-nodata case above.
     size = 5  # 25 px < MIN_VALID_PIXELS (100)
     rng = np.random.default_rng(12)
-    band = rng.normal(-12.0, 2.0, size=(size, size)).astype('float32')
+    band = _db_to_linear(rng.normal(-12.0, 2.0, size=(size, size))).astype('float32')
 
     detector = OtsuDetector()
     result = detector.detect(baseline=None, wet_scene=_wet_scene_from_band(band))
@@ -73,7 +84,7 @@ def test_unimodal_scene_returns_all_zero_not_an_exception():
     # check to be stable, per its own docstring.
     size = 200
     rng = np.random.default_rng(13)
-    band = rng.normal(-12.0, 1.5, size=(size, size)).astype('float32')
+    band = _db_to_linear(rng.normal(-12.0, 1.5, size=(size, size))).astype('float32')
 
     detector = OtsuDetector()
     result = detector.detect(baseline=None, wet_scene=_wet_scene_from_band(band))
@@ -83,7 +94,7 @@ def test_unimodal_scene_returns_all_zero_not_an_exception():
 
 def test_constant_band_returns_all_zero_not_an_exception():
     size = 20
-    band = np.full((size, size), -12.0, dtype='float32')
+    band = np.full((size, size), _db_to_linear(-12.0), dtype='float32')
 
     detector = OtsuDetector()
     result = detector.detect(baseline=None, wet_scene=_wet_scene_from_band(band))
