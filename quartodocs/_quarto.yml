@@ -50,6 +50,7 @@ quartodoc:
       contents:
         - detectors.FloodDetector
         - detectors.ZScoreDetector
+        - detectors.OtsuDetector
     - title: "Preprocessing"
       desc: "Reprojection, clipping, stacking, slope."
       contents:
