@@ -15,9 +15,12 @@ def sign_in():
     Reads an optional MPC subscription key from the MPC_SUBSCRIPTION_KEY
     environment variable. A subscription key is never required -- MPC's
     STAC search and asset signing both work anonymously; a key only
-    raises the request rate limit.
+    raises the request rate limit. The key is not validated here: an
+    invalid or expired key is accepted silently and will only surface as
+    an authentication error on a later search or asset-signing call.
 
-    Returns a pystac_client.Client already configured to sign asset URLs.
+    Returns:
+        pystac_client.Client: client already configured to sign asset URLs.
     """
     subscription_key = os.environ.get('MPC_SUBSCRIPTION_KEY')
     if subscription_key:

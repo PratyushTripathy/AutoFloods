@@ -49,13 +49,10 @@ class OtsuDetector(FloodDetector):
     generate_number_of_scenes, monthly_sum, the mosaicking scripts)
     works unchanged.
 
-    Not the default detector, and not used for any result in the
-    SoftwareX manuscript -- see ZScoreDetector's docstring and
-    Section 2.1 of the paper for why Z-score is preferred in production:
-    single-scene thresholding is more prone to false positives over
-    smooth, non-water surfaces (bare soil, paved areas) than a method
-    that compares each scene against a multi-scene dry-season baseline
-    for the same pixel.
+    Not the default detector: single-scene thresholding is more prone to
+    false positives on smooth non-water surfaces than a method that
+    compares against a multi-scene dry-season baseline. See
+    ZScoreDetector's docstring for the alternative.
 
     Degenerate per-band cases (handled by returning an all-"not flooded"
     classification for that band, with a logged warning, rather than
@@ -80,6 +77,13 @@ class OtsuDetector(FloodDetector):
         return xr.DataArray()
 
     def detect(self, baseline, wet_scene):
+        """
+        Classify `wet_scene` by thresholding each band's own histogram
+        with Otsu's method (see _below_otsu_threshold); `baseline` is
+        unused. Returns the same 0/1/2/3 encoding as
+        ZScoreDetector.detect, with NaN preserved wherever either band's
+        input was invalid.
+        """
         vv = wet_scene.loc['vv_ds']
         vh = wet_scene.loc['vh_ds']
 
@@ -105,21 +109,17 @@ class OtsuDetector(FloodDetector):
         to all-False (logged) for any of the degenerate cases in this
         class's docstring, instead of raising.
 
-        OPERA RTC-S1 gamma0 is delivered in linear power (confirmed by
-        direct inspection: real tile 318 VV/VH values cluster near 1.0
-        with a long right tail, never negative -- not dB). Otsu
-        thresholding on SAR backscatter is conventionally done in dB:
-        linear power compresses the water and land populations into one
-        right-skewed distribution, which is exactly what this method's
-        own bimodality check is designed to reject, and does -- an
-        unguarded linear-scale threshold on real tile 318 data flagged
-        99.95% of one band as "flooded". Converting to dB restores the
-        separation the guard needs to find. Values <= 0 are not expected
-        for real gamma0 but would produce -inf under log10; they are
-        masked to NaN instead, consistent with how the rest of this
-        method treats invalid pixels.
+        Backscatter is converted to dB before thresholding, since OPERA
+        RTC-S1 gamma0 is delivered in linear power, which compresses the
+        water/land populations together and defeats the bimodality guard
+        below. Values <= 0 are masked to NaN rather than passed to log10.
         """
         with np.errstate(divide='ignore', invalid='ignore'):
+            # OPERA RTC-S1 gamma0 confirmed linear power (tile 318:
+            # values cluster near 1.0, long right tail, never negative).
+            # An unguarded linear-scale threshold on that tile flagged
+            # 99.95% of one band as "flooded"; converting to dB restores
+            # the separation the bimodality guard needs.
             values = np.where(band.values > 0, 10 * np.log10(band.values), np.nan)
         valid = ~np.isnan(values)
         n_valid = int(valid.sum())
@@ -210,10 +210,11 @@ class OtsuDetector(FloodDetector):
 
     @property
     def requires_slope_mask(self):
-        # Otsu is, if anything, more prone to false positives on terrain
-        # than Z-score (no dry-season baseline to help distinguish a
-        # genuinely low-backscatter surface from steep-slope layover/
-        # shadow), so slope masking still applies.
+        """
+        True: Otsu has no dry-season baseline to separate genuinely low
+        backscatter from steep-slope layover/shadow, so slope masking
+        still applies.
+        """
         return True
 
     @property

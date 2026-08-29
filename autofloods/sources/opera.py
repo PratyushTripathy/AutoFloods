@@ -22,26 +22,15 @@ OPERA_RTC_S1_COLLECTION = "OPERA_L2_RTC-S1_V1_1"
 
 class OperaPass:
     """
-    A group of same-day OPERA RTC-S1 burst items, together covering an AOI
-    that no single burst covers on its own (OPERA distributes coverage
-    per-burst, ~85x33km, versus one wide swath per MPC scene). Stands in
-    for a plain pystac.Item everywhere autofloods only needs `.id` as a
-    dict key (autofloods.flood_mapper.read_scenes,
-    preprocessing.read_sentinel1_stac); OPERASource.read_vv_vh() knows how
-    to mosaic `.bursts` into one dataset per band.
+    A group of same-day OPERA RTC-S1 burst items covering an AOI that no
+    single burst covers alone. Stands in for a pystac.Item wherever
+    autofloods only needs `.id` as a dict key; OPERASource.read_vv_vh()
+    mosaics `.bursts` into one dataset per band.
 
-    Grouped by calendar date only (not track/subswath) so that all
-    coverage of an AOI on a given date -- possibly spanning more than one
-    satellite track/subswath -- lands in one composite image per date,
-    matching the one-scene-per-date semantics the rest of the pipeline
-    (built around MPC's already-merged-per-swath scenes) assumes. Note:
-    bursts from different tracks were captured at different times/angles
-    (different orbit passes), so a same-date-different-track mosaic is a
-    deliberate simplification -- differing incidence angles across tracks
-    could introduce backscatter inconsistency at the seam, similar in
-    kind to the earlier UTM-zone mosaic seam issue found in the MPC
-    pipeline. Revisit if wet-season detection shows date-boundary
-    artifacts in tiles covered by multiple tracks.
+    Grouped by calendar date only, not by track/subswath, so a date's
+    full AOI coverage lands in one composite image even when it spans
+    multiple tracks -- a deliberate simplification that can introduce
+    backscatter seams from differing incidence angles across tracks.
     """
 
     def __init__(self, pass_id, bursts):
@@ -127,6 +116,14 @@ class OPERASource(STACSource):
             )
 
     def search_sentinel1(self, bbox, start_date, end_date):
+        """
+        Return one OperaPass per calendar date with burst coverage of bbox
+        within [start_date, end_date] -- not one pystac.Item per scene as
+        the base contract's literal type suggests; OperaPass duck-types as
+        an Item via `.id` and `.geometry`. Reprocessed granules are deduped,
+        keeping only the most recently processed version of each
+        (tile, acquisition_time) pair.
+        """
         if self._catalog is None:
             self.authenticate()
 
@@ -180,6 +177,11 @@ class OPERASource(STACSource):
         ]
 
     def vv_vh_hrefs(self, item):
+        """
+        Not supported. OPERASource distributes AOI coverage across multiple
+        burst files per pass, so no single href pair represents a full
+        scene -- use read_vv_vh() instead. Always raises NotImplementedError.
+        """
         raise NotImplementedError(
             "OPERASource distributes AOI coverage across multiple burst "
             "files per pass; a single href pair can't represent a full "
@@ -189,6 +191,13 @@ class OPERASource(STACSource):
         )
 
     def read_vv_vh(self, item, overview_level=None):
+        """
+        Download item's bursts to local disk, mosaic each band into a VRT,
+        and return (vv_dataarray, vh_dataarray) covering the pass's full
+        footprint. overview_level is accepted for interface compatibility
+        but ignored -- OPERA RTC-S1 GeoTIFFs ship without an internal
+        overview pyramid.
+        """
         from ..utils import open_rasterio_with_retry
         import shutil
 
@@ -230,11 +239,9 @@ class OPERASource(STACSource):
     def _download_burst(self, href, tmp_dir, max_attempts=3, backoff_seconds=10):
         """
         Download one burst asset to a local file under tmp_dir via a plain
-        sequential requests.get(stream=True) -- the download-then-local
-        pattern validated by this project's smoke test and the sister
-        edge-india-crop-mapping pipeline. self.sign() already resolves the
-        full auth-redirect chain to a directly-fetchable, presigned
-        CloudFront URL, so this download itself needs no further auth.
+        sequential GET (not GDAL /vsicurl/ streaming), retrying up to
+        max_attempts times on request failures. self.sign() resolves auth
+        before the download, so no further auth is needed here.
         """
         signed_url = self.sign(href)
         dest = os.path.join(tmp_dir, href.rsplit("/", 1)[-1])

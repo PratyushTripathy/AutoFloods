@@ -18,10 +18,23 @@ class ZScoreDetector(FloodDetector):
     """
 
     def __init__(self, vv_thd: float = -2.5, vh_thd: float = -2.5):
+        """
+        Parameters
+        ----------
+        vv_thd, vh_thd : float
+            Z-score thresholds for the VV and VH bands; a pixel is
+            flagged flooded in that band when its anomaly is <= this
+            value (more negative = stricter).
+        """
         self.vv_thd = vv_thd
         self.vh_thd = vh_thd
 
     def fit_baseline(self, vv_stack, vh_stack):
+        """
+        Per-pixel dry-season mean and standard deviation for each band,
+        concatenated along a new `band` coordinate
+        ['vv_mean', 'vv_std', 'vh_mean', 'vh_std'].
+        """
         return xr.concat(
             [
                 vv_stack.mean(axis=0),
@@ -33,6 +46,15 @@ class ZScoreDetector(FloodDetector):
         ).assign_coords(band=['vv_mean', 'vv_std', 'vh_mean', 'vh_std'])
 
     def detect(self, baseline, wet_scene):
+        """
+        Classify `wet_scene` against `baseline` using per-band Z-score
+        thresholds (self.vv_thd, self.vh_thd). Returns the 0/1/2/3
+        (none/VH/VV/high-confidence) encoding described in
+        FloodDetector.detect. Pixels where either band's anomaly is NaN
+        (e.g. a tile-edge artifact or missing input data) are set to NaN
+        in the output rather than 0, so gaps aren't misread as "not
+        flooded".
+        """
         # calculate anomaly and flood cells for VV band
         anomaly_vv = (wet_scene.loc['vv_ds'] - baseline.loc['vv_mean']) / baseline.loc['vv_std']
         floods_vv = (anomaly_vv < self.vv_thd).astype(int)

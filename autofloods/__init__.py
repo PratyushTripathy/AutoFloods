@@ -1,5 +1,10 @@
 # autofloods/__init__.py
 
+"""
+Core orchestrator for the AutoFloods SAR flood-mapping pipeline.
+See flood_mapper for the pipeline entry point and method call order.
+"""
+
 import geopandas as gpd
 import autofloods.utils
 import autofloods.preprocessing
@@ -98,30 +103,21 @@ class flood_mapper():
                                           instead -- intended for isolating concurrent SLURM jobs
                                           from each other, one output_dir per job.
         cell_size                       : int
-                                          The pixel size (meters, in each tile's own local UTM
-                                          zone) EVERY reprojection in this pipeline is forced
-                                          onto -- not derived from any scene's own metadata, so
-                                          a tile's grid is identical across every run regardless
-                                          of which scenes/years produced the input data (see
-                                          preprocessing.clip_xarray_using_id's docstring for the
-                                          cross-year grid-drift bug this predictability fixes).
-                                          Default 30 matches OPERA RTC-S1's native resolution,
-                                          the current primary source (autofloods.sources.OPERASource).
-                                          Set explicitly for a different source/resolution, e.g.
-                                          20 for an MPC run at a 20m overview level.
+                                          Pixel size in meters (in each tile's own UTM zone)
+                                          that every reprojection in the pipeline is forced
+                                          onto, regardless of source scene resolution -- keeps
+                                          a tile's grid identical across runs/years (default
+                                          30 matches OPERA RTC-S1's native resolution; see
+                                          preprocessing.clip_xarray_using_id for details).
 
-        Key derived attributes (set here, used throughout the pipeline):
-        aoi_union/aoi_list are the search bboxes (combined and per-AOI,
-        respectively; see utils.gpd_to_json); dry_years is normalized to a
-        contiguous range even if given as [start, end]; already_processed_aoi_ids
-        (set in generate_defaults()) lists AOIs whose dry-season baseline
-        already exists on disk and will be skipped/reloaded rather than
-        recomputed.
+        Sets aoi_union/aoi_list (combined and per-AOI search bboxes), normalizes
+        dry_years to a contiguous range, and populates already_processed_aoi_ids
+        (AOIs whose dry-season baseline already exists on disk, set in
+        generate_defaults()).
 
-        `grid_shapefile` must have (at minimum) columns `id_col` (AOI ID),
-        `dry_date_col` (comma-separated dry months, e.g. "04,05"), and
-        `zone` (UTM zone number as a string, e.g. "45R") -- every tile's
-        UTM reprojection target is derived from this `zone` column.
+        `grid_shapefile` must have columns `id_col` (AOI ID), `dry_date_col`
+        (comma-separated dry months, e.g. "04,05"), and `zone` (UTM zone number
+        as a string, e.g. "45R") -- every tile's UTM target derives from `zone`.
 
         Examples
         --------
@@ -163,6 +159,10 @@ class flood_mapper():
         self.generate_defaults()
 
     def create_out_dirs(self):
+        """
+        Build self.folders_to_create (the full output/resources directory tree
+        for this instance) and create each folder on disk, including parents.
+        """
         self.folders_to_create = [
             self.output_base,
             os.path.join(self.output_base, 'mean_std'),
@@ -180,6 +180,14 @@ class flood_mapper():
             os.makedirs(folder, exist_ok=True)
 
     def generate_defaults(self):
+        """
+        Compute per-instance search/output state derived from __init__ args:
+        aoi_union/aoi_list (search bboxes), self.timestamp, the JSON cache and
+        mean/std NetCDF path templates (dry/wet aoi_scene and scene_aoi JSON
+        files, self.nc_outfile), and already_processed_aoi_ids -- AOI IDs whose
+        dry-season baseline .nc already exists on disk and will be skipped and
+        reloaded rather than recomputed. Called once at the end of __init__.
+        """
         # this is for searching scenes
         self.aoi_union = utils.gpd_to_json(id_list=self.selected_grid_id, infile=self.grid_shapefile_path,
                                            separate=False, id_key=self.id_key)
@@ -470,9 +478,9 @@ class flood_mapper():
         still in native CRS (see preprocessing.read_sentinel1_stac).
         `overview_level` is source-dependent -- MPCSource's COGs have an
         internal pyramid (lower = higher resolution); OPERASource ignores
-        it (no pyramid, always native 30m). `max_workers` has been
-        soak-tested at 6 against OPERA (real Apr-Oct 2024 data, 0
-        failures) -- see autofloods.sources's module docstring.
+        it (no pyramid, always native 30m). `max_workers` default (6) is
+        a safe concurrency level against OPERASource -- see
+        autofloods.sources's module docstring for source-specific guidance.
         """
         if dry_wet == 'dry':
             s1_scenes = self.dry_s1_scenes
@@ -512,21 +520,14 @@ class flood_mapper():
         AOIs reloaded from disk (load_mean_std_by_aoi()). Pixels with
         stray large sentinel values (>= 50, e.g. from an upstream nodata
         convention) are masked to NaN before fitting so they don't skew
-        the mean/std. Skips fitting entirely for a detector where
-        requires_baseline_fitting is False -- self.detector.fit_baseline()
-        is never called and no baseline .nc is written -- but
-        mean_std_by_aoi[id] is still set, to the tile's own reprojected
-        dry-season VV stack rather than a fitted baseline. This is NOT a
-        statistical baseline and no caller should read its values; it
-        exists purely because prepare_slope(), map_floods()'s slope
-        masking, merge_floods_by_date(), and generate_number_of_scenes()
-        all pull this tile-year's CRS/grid (.rio.crs, .rio.bounds(),
-        .coords, .dims) from mean_std_by_aoi[id], regardless of detector.
-        Setting it to None here (an earlier version did) satisfies the
-        "don't fit a baseline" requirement but breaks all four of those
-        on first use, since none of them actually check for None -- this
-        was dead code until OtsuDetector (the first requires_baseline_
-        fitting=False detector) exercised it.
+        the mean/std.
+
+        If self.detector.requires_baseline_fitting is False, fit_baseline()
+        is never called and no baseline .nc is written; mean_std_by_aoi[id]
+        is set instead to the tile's own reprojected dry-season VV stack,
+        used purely as a CRS/grid reference by prepare_slope(), map_floods(),
+        merge_floods_by_date(), and generate_number_of_scenes() -- it is NOT
+        a statistical baseline and must not be read as one.
 
         reproject_max_workers is passed through to
         preprocessing.reproject_clip_stac()/stack_images()'s thread pools
@@ -903,9 +904,8 @@ class flood_mapper():
         rather than resuming mid-pipeline. Intended to be checked right
         after constructing flood_mapper, before calling any other method,
         so a production script can skip already-finished tiles cheaply
-        (recovering from a killed/restarted batch without redoing
-        tiles that already finished, e.g. after job 1078026's hang).
-        Mid-pipeline resumption for a tile that's partially done (e.g.
+        (recovering from a killed/restarted batch without redoing tiles
+        that already finished). Mid-pipeline resumption for a tile that's partially done (e.g.
         dry-season baseline computed but wet-season detection not yet
         run) is handled separately -- see already_processed_aoi_ids in
         generate_defaults(), which skips the (expensive, network-bound)

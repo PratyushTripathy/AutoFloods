@@ -75,16 +75,11 @@ def open_rasterio_with_retry(href, overview_level=None, masked=True, max_attempt
                       attempts (e.g. a time-limited signed URL) -- it is
                       called again before every attempt, including the
                       first, so each attempt gets a freshly-minted href
-                      rather than retrying the same one that may have
-                      expired while earlier attempts were retrying (see
-                      MPCSource.read_vv_vh, which hit exactly this: a SAS
-                      token signed once up front expired mid-retry-loop on
-                      slow native-resolution reads under bounded worker
-                      concurrency, so every subsequent attempt retried an
-                      already-expired token and never had a chance to
-                      succeed). A plain string is still accepted for hrefs
-                      that don't expire (e.g. OPERASource's local VRT
-                      paths) and is used as-is on every attempt.
+                      rather than retrying one that may have expired
+                      during an earlier attempt's wait. A plain string is
+                      still accepted for hrefs that don't expire (e.g.
+                      OPERASource's local VRT paths) and is used as-is on
+                      every attempt.
     overview_level  : int or None
                       Passed through to rioxarray.open_rasterio if given.
     masked          : bool

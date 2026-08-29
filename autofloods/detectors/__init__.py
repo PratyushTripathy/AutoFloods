@@ -3,23 +3,15 @@
 """
 Flood detection backends for autofloods.
 
-Implemented:
+- ZScoreDetector: Z-score thresholding on VV/VH backscatter against a
+  dry-season baseline. requires_baseline_fitting = True. The pipeline's
+  default detector.
+- OtsuDetector: single-scene Otsu thresholding; needs no dry-season
+  baseline. requires_baseline_fitting = False.
 
-- ZScoreDetector: the pipeline's default and only field-validated
-  method (Z-score thresholding on VV/VH backscatter, adapted from
-  Global Flood Mapper). requires_baseline_fitting = True. Used for
-  every result in the SoftwareX manuscript.
-- OtsuDetector: single-scene Otsu thresholding, needs no dry-season
-  baseline at all. requires_baseline_fitting = False -- the first
-  detector to actually exercise that flag's skip path through
-  flood_mapper (see flood_mapper.generate_mean_std_by_aoi's docstring).
-  Not the default; see OtsuDetector's own docstring for why.
-
-Future work, not yet implemented: a deep-learning backend. The
-FloodDetector interface's requires_baseline_fitting flag exists
-specifically so a pretrained DL detector (which loads weights once,
-globally, rather than fitting a per-tile dry-season baseline) can skip
-fit_baseline() entirely without a redesign of this interface.
+New backends implement the FloodDetector interface in .base; the
+requires_baseline_fitting flag lets a detector (e.g. a pretrained
+model loading weights once, globally) skip fit_baseline() entirely.
 """
 
 from .base import FloodDetector

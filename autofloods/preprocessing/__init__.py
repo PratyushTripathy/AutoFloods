@@ -16,19 +16,10 @@ import concurrent.futures
 def read_sentinel1_stac(stac_item, source, overview_level=3):
     """
     Read a STAC item's VV/VH bands and convert them from decibel to linear
-    scale (see utils.decibel_to_linear). Does NOT
-    reproject -- every consumer of this function's output (reproject_clip_stac
-    for dry-season scenes, clip_xarray_using_id for wet-season scenes)
-    reprojects straight to the target tile's UTM zone itself. An earlier
-    version reprojected to EPSG:4326 here first, which every consumer then
-    reprojected a second time to UTM -- a redundant full-raster warp on
-    every scene for no benefit (nothing downstream ever needed the 4326
-    intermediate). Benchmarked on tile 321's dry-season scenes: dropping
-    the 4326 hop cut per-scene reprojection time by ~48% (50.4s -> 26.5s
-    across 18 scenes) with no change in final output, since stack_images()
-    already re-grids every scene onto a common reference via
-    clip_xarray_using_id()'s .interp() step regardless of what reprojection
-    path preceded it.
+    scale (see utils.decibel_to_linear). Does NOT reproject -- every
+    consumer of this function's output (reproject_clip_stac for
+    dry-season scenes, clip_xarray_using_id for wet-season scenes)
+    reprojects directly to the target tile's UTM zone itself.
 
     Parameters
     __________
@@ -68,10 +59,8 @@ def reproject_clip_stac(reprojected_dict, aoi_scene_dict, grid_shapefile_path, i
     extent from the grid shapefile.
 
     Scenes are reprojected+clipped concurrently via a thread pool (GDAL's
-    warp releases the GIL, confirmed via rasterio's own concurrency docs,
-    so this is genuine multi-core parallelism, not GIL-bound) -- measured
-    2.5x-6.4x faster end-to-end on real tile data with byte-identical
-    output (max abs pixel diff 0.0) vs the previous sequential version.
+    warp releases the GIL, so this is genuine multi-core parallelism, not
+    GIL-bound).
 
     Parameters
     __________
@@ -130,11 +119,9 @@ def stack_images(clipped_dict, grid_shapefile_path, id, max_workers=None, cell_s
     stack them -- see clip_xarray_using_id's docstring for why cell_size
     is a forced parameter rather than derived from the data.
 
-    The per-scene alignment runs concurrently via a thread pool (same
-    GIL-releasing GDAL warp behind clip_xarray_using_id as
-    reproject_clip_stac() -- see its docstring for the measured speedup
-    and correctness verification). max_workers: None (default) uses
-    utils.default_max_workers() -- (available CPUs - 1) on whatever
+    The per-scene alignment runs concurrently via a thread pool for the
+    same reason as reproject_clip_stac(). max_workers: None (default)
+    uses utils.default_max_workers() -- (available CPUs - 1) on whatever
     system this runs on.
 
     Returns {'vv_stack': DataArray, 'vh_stack': DataArray}.
@@ -184,38 +171,45 @@ def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray, b
     Reproject `data_xarray` to AOI `aoi_id`'s UTM zone and resample it
     onto a fixed, explicit pixel grid (`cell_size` meters, origin from
     the AOI polygon's own bounds) via .interp() -- this is what makes
-    independently-reprojected scenes/layers stackable/comparable
-    pixel-for-pixel, and what makes a tile's grid identical across every
-    run regardless of which scenes/years produced the input data.
-    `fill_value='extrapolate'` is used deliberately for sub-pixel edge
-    gaps from reprojection rounding, not to invent real data -- see the
-    inline comment below for the specific bug this prevents.
+    independently-reprojected scenes/layers stackable pixel-for-pixel,
+    and what keeps a tile's grid identical across every run regardless
+    of which scenes/years produced the input data.
 
-    cell_size is REQUIRED to be an explicit, forced value, not derived
-    from `ref_xarray`'s own metadata -- an earlier version computed it
-    via round(ref_xarray's GeoTransform pixel size), which fixed a real
-    cross-year grid-drift bug (GDAL's .rio.reproject() computes a
-    slightly different resolution per scene, e.g. 29.998m vs 30.002m,
-    which compounds to several pixels of drift over a ~110km tile) but
-    is itself not a robust general solution: rounding assumes the true
-    resolution is already close to a whole number in whatever units the
-    tile's local UTM zone uses, which won't hold for every data source
-    or region worldwide, and "close enough to round correctly" isn't the
-    same guarantee as "always exactly this value." An explicit,
-    caller-forced cell_size removes that assumption entirely -- the grid
-    is exactly `cell_size` because that's what was asked for, not because
-    the input data's own metadata happened to be close to it. The
-    default (30) matches OPERA RTC-S1's native resolution, the current
-    primary data source (see autofloods.sources.OPERASource) -- pass a
-    different value for a different source/resolution (e.g. an MPC
-    overview level), threaded from flood_mapper's own cell_size
-    parameter down through every call in this module.
+    cell_size is always caller-supplied rather than derived from
+    `ref_xarray`'s own metadata, since GDAL's reproject() computes a
+    slightly different resolution per scene call, which would otherwise
+    compound into cross-scene/cross-year grid drift. Default (30) matches
+    OPERA RTC-S1's native resolution, the current primary data source;
+    pass a different value for another source/resolution.
 
     buffer, if set, buffers the AOI polygon (in its own UTM, meters)
     before clipping -- used for slope, whose kernel needs pixels beyond
     the tile edge to avoid starving edge cells of neighbors.
+
     slope=True additionally resamples to ref_xarray's own bounds first
     (slope's DEM-derived grid needs this extra step; VV/VH scenes don't).
+
+    Parameters
+    ----------
+    data_xarray : xarray.DataArray
+        Array to reproject and resample; any input CRS.
+    grid_shapefile_path : str
+        Path to the tile grid shapefile/geopackage used to resolve aoi_id's UTM zone and bounds.
+    aoi_id : str
+        AOI/tile ID to clip to.
+    ref_xarray : xarray.DataArray
+        Reference array providing bounds when slope=True.
+    buffer : float, optional
+        Buffer distance in meters (AOI's own UTM), for slope's kernel padding.
+    slope : bool, optional
+        If True, resample to ref_xarray's own bounds before the final regrid.
+    cell_size : float, optional
+        Output pixel size in meters. Default 30 (OPERA RTC-S1 native resolution).
+
+    Returns
+    -------
+    xarray.DataArray
+        Reprojected array resampled onto the tile's fixed cell_size grid.
     """
     # extract target extent from the grid polygon
     gdf = gpd.read_file(grid_shapefile_path)

@@ -106,6 +106,14 @@ class MPCSource(STACSource):
         return item.assets[self._vv_asset_key].href, item.assets[self._vh_asset_key].href
 
     def read_vv_vh(self, item, overview_level=None):
+        """
+        Open and return (vv_dataarray, vh_dataarray) for item.
+
+        Re-signs each href immediately before every read attempt (not once
+        up front), since Azure SAS tokens are short-lived (~45 min) and a
+        queued read can outlive a token that was fresh when this method was
+        called.
+        """
         from ..utils import open_rasterio_with_retry
 
         # Re-sign before opening, rather than trusting the SAS token
@@ -149,6 +157,13 @@ class MPCSource(STACSource):
         return item.assets[self._dem_asset_key].href
 
     def sign(self, href):
+        """
+        Return a freshly-signed, fetchable URL for href.
+
+        Strips any existing signature query string from href first, so a
+        previously-signed (and possibly expired) URL is always re-signed
+        rather than returned unchanged.
+        """
         import planetary_computer
 
         # planetary_computer.sign_url() short-circuits and returns href
