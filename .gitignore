@@ -1,7 +1,3 @@
-# Sphinx documentation
-doc/_build/
-.buildinfo
-
 # Quarto documentation (quartodocs/) build artifacts
 quartodocs/_site/
 quartodocs/.quarto/
@@ -9,6 +5,12 @@ quartodocs/reference/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+
+# Figure grid script/notebook -- experimental, not synced/canonical, kept
+# local only (see fig_grid.pdf/png in the manuscript repo for the actual
+# paper figure)
+scripts/figures/fig_grid.py
+scripts/figures/fig_grid.ipynb
 
 __pycache__/
 *.xml
