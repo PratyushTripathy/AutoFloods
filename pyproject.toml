@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autofloods"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Automated flood mapping at scale from Sentinel-1 SAR using Z-score thresholding"
 readme = "README.md"
 license = { text = "MIT" }
