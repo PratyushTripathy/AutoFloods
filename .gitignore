@@ -15,6 +15,7 @@ scripts/figures/fig_grid.ipynb
 __pycache__/
 *.xml
 .DS_Store
+.idea/
 
 # packaging build artifacts
 *.egg-info/

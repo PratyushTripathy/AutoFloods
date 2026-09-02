@@ -4,11 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autofloods"
-version = "2023.9.1"
+version = "0.1.0"
 description = "Automated flood mapping at scale from Sentinel-1 SAR using Z-score thresholding"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
+authors = [
+    { name = "Pratyush Tripathy", email = "tripathyshared@gmail.com" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
 dependencies = [
     "geopandas==0.13.2",
     "rioxarray==0.14.1",
@@ -23,7 +34,7 @@ dependencies = [
     "pystac-client==0.6.1",
     "scikit-image==0.19.3",
     "scikit-learn==1.1.2",
-    "planetary-computer",
+    "planetary-computer==1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -37,5 +48,12 @@ dev = ["pytest"]
 # `quarto render quartodocs/` after `quartodoc build` in that directory.
 docs = ["quartodoc", "griffe<2"]
 
+[project.urls]
+Homepage = "https://github.com/PratyushTripathy/AutoFloods"
+Repository = "https://github.com/PratyushTripathy/AutoFloods"
+
 [tool.setuptools.packages.find]
 include = ["autofloods*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
