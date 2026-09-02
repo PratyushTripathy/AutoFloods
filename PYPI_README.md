@@ -34,4 +34,4 @@ fm.map_floods()
 fm.merge_floods_by_date(export_raster=True)
 ```
 
-See the documentation for full usage, API reference, and citation details: [link — TBD, Read the Docs not live yet]
+See the documentation for full usage, API reference, and citation details: https://autofloods.readthedocs.io/en/latest/
