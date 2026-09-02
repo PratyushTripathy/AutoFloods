@@ -58,6 +58,6 @@ If you use this package (or part of it), please cite:
 
 ## Affiliation & funding
 
-MapSolve AI Pvt. Ltd., India, and University of California, Santa
-Barbara, United States. Completed with support from the Group on Earth
-Observation (GEO)-Microsoft Planetary Computer Grant.
+Department of Geography, University of California, Santa Barbara.
+
+Funded by NASA FINESST (Award #80NSSC25K0392).
