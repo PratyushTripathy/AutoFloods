@@ -7,7 +7,7 @@ launched by editing a config file rather than a notebook or a per-tile
 Python script.
 
 Usage:
-    python scripts/run_autofloods.py --config scripts/bihar2024_opera_config.yaml
+    python scripts/run_autofloods.py --config examples/bihar_2024_opera_config.yaml
 
 Processes grid_id_list one AOI at a time, each through the full pipeline
 in the same fixed step order the hand-written per-tile scripts use --
