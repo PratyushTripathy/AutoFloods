@@ -4,12 +4,8 @@ AutoFloods is a Python package for automated flood mapping at scale from Sentine
 
 ## Quickstart
 
-Install:
-
 <!-- TODO: drop --pre once a stable (non-alpha/beta) 0.1.0 release exists -->
-```bash
-pip install --pre autofloods
-```
+This is a pre-release — install with: `pip install --pre autofloods`
 
 Basic usage:
 
