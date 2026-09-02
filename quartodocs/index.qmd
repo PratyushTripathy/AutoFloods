@@ -34,6 +34,12 @@ Swap between them (or add a new source) via the `source=` argument to
 ## Installation
 
 ```bash
+pip install --pre autofloods
+```
+
+For contributors working from a local clone:
+
+```bash
 pip install -e .
 ```
 
