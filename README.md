@@ -9,7 +9,7 @@ AutoFloods is a Python package for automated flood mapping at scale from Sentine
 
 Both the data source and the flood-detection method are pluggable. `MPCSource` (Microsoft Planetary Computer) and `OPERASource` (NASA OPERA RTC-S1) are interchangeable STAC data backends; `ZScoreDetector` (default) flags anomalies against a dry-season baseline, and `OtsuDetector` classifies each scene against its own histogram with no baseline required. New sources or detectors can be added without changing the rest of the pipeline.
 
-Full documentation, including setup and usage, is available at the docs site (TBD).
+Full documentation, including setup and usage, is available at [autofloods.readthedocs.io](https://autofloods.readthedocs.io/en/latest/).
 
 **Suggested citation**<br/>
 The algorithm of this flood mapping workflow is an extension of our previous work on open-source flood mapping tools. If you are using this repository (or part of it) for your own work, consider citing the following:

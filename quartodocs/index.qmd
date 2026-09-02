@@ -53,14 +53,14 @@ for setup steps.
 
 If you use this package (or part of it), please cite:
 
-> Tripathy, P. and Malladi, T. (2021). Global Flood Mapper: Democratising
-> open EO resources for flood mapping. *EGU General Assembly 2021*,
-> online, 19-30 Apr 2021, EGU21-16194.
-> <https://doi.org/10.5194/egusphere-egu21-16194>
-
-> Tripathy, P. & Malladi, T. (2022). Global Flood Mapper: a novel Google
+> Tripathy, P., & Malladi, T. (2022). Global Flood Mapper: a novel Google
 > Earth Engine application for rapid flood mapping using Sentinel-1 SAR.
-> *Natural Hazards*. <https://doi.org/10.1007/s11069-022-05428-2>
+> *Natural Hazards*, 114(2), 1341-1363.
+> <https://doi.org/10.1007/s11069-022-05428-2>
+
+> Tripathy, P., Malladi, T., Balakrishnan, K., & Parath, N. (n.d.).
+> *AutoFloods: A Python package for automated flood mapping at scale
+> using Sentinel-1 SAR* [Manuscript in preparation].
 
 ## Affiliation & funding
 

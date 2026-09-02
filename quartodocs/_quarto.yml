@@ -4,7 +4,7 @@ project:
 
 website:
   title: "AutoFloods"
-  description: "Automated Sentinel-1 SAR flood mapping at scale, via Z-score thresholding."
+  description: "Automated flood mapping at scale from Sentinel-1 SAR imagery."
   navbar:
     logo: autofloods_logo.png
     title: false
