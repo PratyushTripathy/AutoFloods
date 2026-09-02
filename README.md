@@ -1,6 +1,9 @@
 ![AutoFloods](autofloods_logo.png)
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22258069.svg)](https://doi.org/10.5281/zenodo.22258069)
+[![Documentation Status](https://readthedocs.org/projects/autofloods/badge/?version=latest)](https://autofloods.readthedocs.io/en/latest/?badge=latest)
+[![PyPI](https://img.shields.io/pypi/v/autofloods.svg)](https://pypi.org/project/autofloods/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 AutoFloods is a Python package for automated flood mapping at scale from Sentinel-1 SAR imagery. It maps flooded areas over large regions by splitting them into tiles and processing each one independently, so the same workflow scales from a single tile to a country-sized run.
 
