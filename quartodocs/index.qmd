@@ -40,7 +40,8 @@ pip install -e .
 See `pyproject.toml` for the pinned dependency list. `MPCSource` needs no
 credentials for typical use (a subscription key is optional, raising the
 request rate limit); `OPERASource` requires a NASA Earthdata Login entry
-in `~/.netrc`.
+in `~/.netrc`. See [Getting Started](getting-started.qmd#authentication)
+for setup steps.
 
 ## Citation
 

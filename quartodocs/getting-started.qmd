@@ -6,6 +6,33 @@ There are two ways to run AutoFloods: a config file + the runner script
 (fastest way to launch a real job, no code to write), or the
 `flood_mapper` class directly in a notebook/script (more control).
 
+## Authentication
+
+Credentials depend on which `STACSource` you use, and only one is needed:
+
+- **`MPCSource`** (Microsoft Planetary Computer) works with no credentials
+  at all -- search and asset access both fall back to anonymous requests.
+  A subscription key is optional and only raises the request rate limit,
+  useful for large batch runs. Get one free at
+  [planetarycomputer.microsoft.com/account](https://planetarycomputer.microsoft.com/account),
+  then set it as an environment variable:
+  ```bash
+  export MPC_SUBSCRIPTION_KEY=your-key-here
+  ```
+  It's picked up automatically; nothing needs to be passed in code or in
+  a config file. Never commit the key value itself anywhere in the repo.
+- **`OPERASource`** (NASA OPERA RTC-S1 via ASF/CMR) requires a NASA
+  Earthdata Login. Create a free account at
+  [urs.earthdata.nasa.gov](https://urs.earthdata.nasa.gov), then add an
+  entry to `~/.netrc`:
+  ```
+  machine urs.earthdata.nasa.gov
+    login your-username
+    password your-password
+  ```
+  `requests` picks this up automatically on the OAuth redirect; no
+  environment variable or code change needed.
+
 ## Option 1: config file + runner script
 
 `scripts/run_autofloods.py` is a plain script (outside the `autofloods`
