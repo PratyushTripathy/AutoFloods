@@ -2,9 +2,9 @@
 title: "Getting Started"
 ---
 
-There are two ways to run AutoFloods: a config file + the runner script
-(fastest way to launch a real job, no code to write), or the
-`flood_mapper` class directly in a notebook/script (more control).
+There are two ways to run AutoFloods: the `flood_mapper` class directly
+in a notebook/script (more control), or a config file + the runner
+script (fastest way to launch a real job, no code to write).
 
 ## Authentication
 
@@ -40,7 +40,62 @@ Credentials depend on which `STACSource` you use, and only one is needed:
   `requests` picks this up automatically on the OAuth redirect; no
   environment variable or code change needed.
 
-## Option 1: config file + runner script
+## Option 1: `flood_mapper` directly
+
+**1. Construct a `flood_mapper`.** This points at your AOI grid, the
+years/dates to process, which data source to read from, and where
+output goes.
+
+```python
+from autofloods import flood_mapper
+from autofloods.sources import OPERASource
+
+fm = flood_mapper(
+    grid_shapefile='resources/india_utm_fishnet_buffer.gpkg',  # AOI grid; needs id_col, dry_date_col, zone columns
+    grid_id_list=[321],                   # which AOI IDs from the grid to process
+    dry_years=[2024, 2024],               # dry-season years to build the baseline from
+    slope_dir='resources/slope/',         # where the terrain-slope mask is cached
+    wet_duration=['2024/07', '2024/10'],  # wet-season date range to classify
+    source=OPERASource(),                 # or MPCSource() (the default)
+    output_dir='output/my_run',           # root dir for all outputs and caches
+)
+```
+
+**2. Build the dry-season baseline.** Search for dry-season scenes,
+download them, and fit each AOI's Z-score baseline (mean + standard
+deviation of dry-season backscatter) that wet-season scenes will later
+be compared against.
+
+```python
+fm.get_dry_dates()                    # read each AOI's dry season into self.dry_months
+fm.generate_dry_date_ranges()         # turn dry_months into per-year search date ranges
+fm.get_s1_items(dry_wet='dry')        # STAC-search the source for dry-season scenes
+fm.read_scenes(dry_wet='dry', overview_level=None, max_workers=6)  # download + read those scenes
+fm.generate_mean_std_by_aoi()         # fit the dry-season Z-score baseline per AOI
+```
+
+**3. Classify wet-season scenes and aggregate.** Prepare the
+terrain-slope mask, then search/read/classify every wet-season scene
+against the baseline, and roll the per-scene results up into per-date
+and per-month outputs.
+
+```python
+fm.prepare_slope(dem_overview=0, buffer=500)  # compute/cache the terrain-slope mask
+
+fm.prepare_wet_scenes(overview_level=None, max_workers=6)  # search, read, reproject wet-season scenes
+fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20,
+              export_raster=False, export_vector=False, export_maps=False)  # classify each scene against the baseline
+fm.merge_floods_by_date(export_raster=True)       # collapse per-scene results into one band per date
+fm.generate_number_of_scenes(export_raster=True)  # per-pixel count of scenes with data gaps
+fm.monthly_sum()                      # aggregate per-date results into per-month flood-day counts
+```
+
+This is the exact method sequence `run_autofloods.py` (Option 2 below)
+drives internally -- see the `flood_mapper` class docstring in the [API
+reference](reference/index.qmd) for what each stage does and what it
+caches to disk.
+
+## Option 2: config file + runner script
 
 `scripts/run_autofloods.py` is a plain script (outside the `autofloods`
 package, so it never needs installing/importing as a module) that reads
@@ -92,43 +147,6 @@ Each AOI is skipped automatically if it already fully completed for the
 exact same `dry_years`/`wet_duration` in a prior run (see
 `flood_mapper.is_fully_processed`) -- safe to re-run the same config
 after a partial failure without redoing finished tiles.
-
-## Option 2: `flood_mapper` directly
-
-```python
-from autofloods import flood_mapper
-from autofloods.sources import OPERASource
-
-fm = flood_mapper(
-    grid_shapefile='resources/india_utm_fishnet_buffer.gpkg',
-    grid_id_list=[321],
-    dry_years=[2024, 2024],
-    slope_dir='resources/slope/',
-    wet_duration=['2024/07', '2024/10'],
-    source=OPERASource(),          # or MPCSource() (the default)
-    output_dir='output/my_run',
-)
-
-fm.get_dry_dates()
-fm.generate_dry_date_ranges()
-fm.get_s1_items(dry_wet='dry')
-fm.read_scenes(dry_wet='dry', overview_level=None, max_workers=6)
-fm.generate_mean_std_by_aoi()
-
-fm.prepare_slope(dem_overview=0, buffer=500)
-
-fm.prepare_wet_scenes(overview_level=None, max_workers=6)
-fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20,
-              export_raster=False, export_vector=False, export_maps=False)
-fm.merge_floods_by_date(export_raster=True)
-fm.generate_number_of_scenes(export_raster=True)
-fm.monthly_sum()
-```
-
-This is the exact method sequence `run_autofloods.py` drives internally
--- see the `flood_mapper` class docstring in the [API
-reference](reference/index.qmd) for what each stage does and what it
-caches to disk.
 
 ## Output
 
