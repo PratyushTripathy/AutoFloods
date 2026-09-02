@@ -17,4 +17,4 @@ MapSolve AI Pvt. Ltd., India.<br/>
 University of California, Santa Barbara, United States.
 
 **Funding**<br/>
-This work was completed with support from the Group on Earth Observation (GEO)-Microsoft Planetary Computer Grant.
+Pratyush Tripathy was supported by a NASA FINESST award (80NSSC25K0392) for this work.
