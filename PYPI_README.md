@@ -1,4 +1,4 @@
-# AutoFloods
+![AutoFloods](https://raw.githubusercontent.com/PratyushTripathy/AutoFloods/main/autofloods_logo.png)
 
 AutoFloods is a Python package for automated flood mapping at scale from Sentinel-1 SAR imagery, with pluggable data sources (Microsoft Planetary Computer, NASA OPERA) and detection methods (Z-score, Otsu).
 

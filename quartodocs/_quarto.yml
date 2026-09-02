@@ -6,6 +6,7 @@ website:
   title: "AutoFloods"
   description: "Automated Sentinel-1 SAR flood mapping at scale, via Z-score thresholding."
   navbar:
+    logo: autofloods_logo.png
     left:
       - href: index.qmd
         text: Overview

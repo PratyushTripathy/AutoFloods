@@ -1,4 +1,5 @@
-# AutoFloods
+![AutoFloods](autofloods_logo.png)
+
 AutoFloods is a Python package for automated flood mapping at scale from Sentinel-1 SAR imagery. It maps flooded areas over large regions by splitting them into tiles and processing each one independently, so the same workflow scales from a single tile to a country-sized run.
 
 Both the data source and the flood-detection method are pluggable. `MPCSource` (Microsoft Planetary Computer) and `OPERASource` (NASA OPERA RTC-S1) are interchangeable STAC data backends; `ZScoreDetector` (default) flags anomalies against a dry-season baseline, and `OtsuDetector` classifies each scene against its own histogram with no baseline required. New sources or detectors can be added without changing the rest of the pipeline.
