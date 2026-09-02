@@ -1,5 +1,7 @@
 # autofloods/sources/mpc.py
 
+from __future__ import annotations
+
 import logging
 import os
 from urllib.parse import urlsplit, urlunsplit

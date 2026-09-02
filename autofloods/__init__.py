@@ -5,6 +5,8 @@ Core orchestrator for the AutoFloods SAR flood-mapping pipeline.
 See flood_mapper for the pipeline entry point and method call order.
 """
 
+from importlib.metadata import version as _pkg_version
+
 import geopandas as gpd
 import autofloods.utils
 import autofloods.preprocessing
@@ -20,7 +22,7 @@ import numpy as np
 import rasterio
 from rasterio.enums import Resampling
 
-__version__ = '2023.9.1'
+__version__ = _pkg_version("autofloods")
 #DEM_OUTFILE = r'nasadem_aoi_id.nc'
 SLOPE_OUTFILE = r'slope_aoi_id.nc'
 
