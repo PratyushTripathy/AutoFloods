@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autofloods"
-version = "0.1.0a6"
+version = "0.1.0a7"
 description = "Automated flood mapping at scale from Sentinel-1 SAR imagery"
 readme = "PYPI_README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9,<3.11"
 authors = [
-    { name = "Pratyush Tripathy", email = "tripathyshared@gmail.com" },
+    { name = "Pratyush Tripathy", email = "pratkrt@gmail.com" },
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

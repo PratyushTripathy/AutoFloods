@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0a7
+
+- Corrected the author contact email in package metadata.
+
 ## 0.1.0a6
 
 - Added automatic grid generation: `autofloods.grid.generate_grid()`
