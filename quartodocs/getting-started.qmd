@@ -38,57 +38,11 @@ Credentials depend on which `STACSource` you use, and only one is needed:
   `requests` picks this up automatically on the OAuth redirect; no
   environment variable or code change needed.
 
-## Grid generation
-
-Both ways of running AutoFloods (see [Running
-AutoFloods](#running-autofloods) below) need a tiling grid
-(`grid_shapefile`) -- a shapefile/geopackage of AOI tile polygons with
-`ID`, `zone`, and `dry_month` columns. If you don't already have one,
-`autofloods.grid.generate_grid` builds one from an AOI boundary, or
-`flood_mapper` can generate it for you on the fly by passing `aoi=`
-instead of `grid_shapefile=` (see [Examples](examples.qmd)).
-
-Two modes:
-
-- **`mode='mgrs'`** (default) -- tiles aligned to MGRS 100km grid
-  squares, one fishnet per UTM zone/latitude band the AOI intersects.
-  Recommended with `OPERASource`, since OPERA RTC-S1 is natively
-  MGRS-tiled -- MGRS-aligned tiles avoid extra clipping/reprojection
-  against the source data's own grid. This is a geometric
-  approximation of true MGRS tiling (a 100km-aligned fishnet computed
-  per UTM zone, labeled via the `mgrs` package), not NASA's
-  authoritative MGRS tile database -- interior tiles match exactly,
-  but tiles right at a UTM zone boundary may not match OPERA's own
-  irregular boundary tiles.
-- **`mode='utm_fishnet'`** -- a fixed-size fishnet (`tile_size_km` per
-  side, default 100) in the AOI's UTM zone(s), independent of MGRS.
-
-```python
-from autofloods.grid import generate_grid
-from shapely.geometry import box
-
-aoi = box(85.0, 25.0, 85.5, 25.5)  # or a shapefile/geopackage path, or a GeoDataFrame
-
-# MGRS mode
-mgrs_grid = generate_grid(aoi, mode='mgrs', dry_months='04,05',
-                           output_path='resources/my_mgrs_grid.gpkg')
-
-# UTM fishnet mode, 50km tiles
-fishnet_grid = generate_grid(aoi, mode='utm_fishnet', tile_size_km=50,
-                              dry_months='04,05',
-                              output_path='resources/my_fishnet_grid.gpkg')
-```
-
-`dry_months` (e.g. `"04,05"`) is required to actually run the pipeline
-with the generated grid -- dry season is climate knowledge, not
-derivable from AOI geometry. Only the Northern Hemisphere is currently
-supported (see `generate_grid`'s docstring in the [API
-reference](reference/index.qmd)).
-
 ## Running AutoFloods
 
 There are two ways to run AutoFloods: the `flood_mapper` class directly
 in a notebook/script (more control), or a config file + the runner
 script (fastest way to launch a real job, no code to write). Both use
 the same underlying pipeline and produce the same output. See
-[Examples](examples.qmd) for full walkthroughs of both.
+[Examples](examples.qmd) for grid generation and full walkthroughs of
+both.
