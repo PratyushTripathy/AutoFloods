@@ -13,6 +13,8 @@ website:
         text: Overview
       - href: getting-started.qmd
         text: Getting Started
+      - href: examples.qmd
+        text: Examples
       - href: reference/index.qmd
         text: API Reference
     right:
@@ -23,6 +25,7 @@ website:
     contents:
       - index.qmd
       - getting-started.qmd
+      - examples.qmd
       - section: "API Reference"
         contents:
           - reference/index.qmd

@@ -1,0 +1,143 @@
+---
+title: "Examples"
+---
+
+See Getting Started first for installation and authentication.
+
+## Option 1: `flood_mapper` directly
+
+**1. Construct a `flood_mapper`.** This points at your AOI grid, the
+years/dates to process, which data source to read from, and where
+output goes.
+
+```python
+from autofloods import flood_mapper
+from autofloods.sources import OPERASource
+
+fm = flood_mapper(
+    grid_shapefile='resources/india_utm_fishnet_buffer.gpkg',  # AOI grid; needs id_col, dry_date_col, zone columns
+    grid_id_list=[321],                   # which AOI IDs from the grid to process
+    dry_years=[2024, 2024],               # dry-season years to build the baseline from
+    slope_dir='resources/slope/',         # where the terrain-slope mask is cached
+    wet_duration=['2024/07', '2024/10'],  # wet-season date range to classify
+    source=OPERASource(),                 # or MPCSource() (the default)
+    output_dir='output/my_run',           # root dir for all outputs and caches
+)
+```
+
+No pre-made grid? Pass `aoi=` instead of `grid_shapefile=`/`grid_id_list=`
+and `flood_mapper` generates one on the fly (see [Grid
+generation](getting-started.qmd#grid-generation)) -- `grid_dry_months`
+is required in that case:
+
+```python
+fm = flood_mapper(
+    aoi='path/to/my_aoi.gpkg',           # or a GeoDataFrame/shapely geometry
+    grid_dry_months='04,05',             # required when generating a grid from aoi
+    dry_years=[2024, 2024],
+    slope_dir='resources/slope/',
+    wet_duration=['2024/07', '2024/10'],
+    source=OPERASource(),                # grid_mode defaults to 'mgrs' for OPERASource
+    output_dir='output/my_run',
+)
+```
+
+**2. Build the dry-season baseline.** Search for dry-season scenes,
+download them, and fit each AOI's Z-score baseline (mean + standard
+deviation of dry-season backscatter) that wet-season scenes will later
+be compared against.
+
+```python
+fm.get_dry_dates()                    # read each AOI's dry season into self.dry_months
+fm.generate_dry_date_ranges()         # turn dry_months into per-year search date ranges
+fm.get_s1_items(dry_wet='dry')        # STAC-search the source for dry-season scenes
+fm.read_scenes(dry_wet='dry', overview_level=None, max_workers=6)  # download + read those scenes
+fm.generate_mean_std_by_aoi()         # fit the dry-season Z-score baseline per AOI
+```
+
+**3. Classify wet-season scenes and aggregate.** Prepare the
+terrain-slope mask, then search/read/classify every wet-season scene
+against the baseline, and roll the per-scene results up into per-date
+and per-month outputs.
+
+```python
+fm.prepare_slope(dem_overview=0, buffer=500)  # compute/cache the terrain-slope mask
+
+fm.prepare_wet_scenes(overview_level=None, max_workers=6)  # search, read, reproject wet-season scenes
+fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20,
+              export_raster=False, export_vector=False, export_maps=False)  # classify each scene against the baseline
+fm.merge_floods_by_date(export_raster=True)       # collapse per-scene results into one band per date
+fm.generate_number_of_scenes(export_raster=True)  # per-pixel count of scenes with data gaps
+fm.monthly_sum()                      # aggregate per-date results into per-month flood-day counts
+```
+
+This is the exact method sequence `run_autofloods.py` (Option 2 below)
+drives internally -- see the `flood_mapper` class docstring in the [API
+reference](reference/index.qmd) for what each stage does and what it
+caches to disk.
+
+## Option 2: config file + runner script
+
+`scripts/run_autofloods.py` is a plain script (outside the `autofloods`
+package, so it never needs installing/importing as a module) that reads
+a YAML config and drives the full pipeline for one or more AOI tiles.
+
+```bash
+python scripts/run_autofloods.py --config scripts/bihar2024_opera_config.yaml
+```
+
+A minimal config looks like this (see
+`scripts/bihar2024_opera_config.yaml` for the full example this project
+actually runs in production):
+
+```yaml
+aoi:
+  grid_shapefile: resources/india_utm_fishnet_buffer.gpkg
+  grid_id_list: [321]        # one or more tile IDs
+  dry_date_col: dry_month
+  id_col: ID
+
+dates:
+  dry_years: [2024, 2024]
+  wet_duration: ['2024/07', '2024/10']
+
+source:
+  type: opera                # mpc | opera
+
+detector:
+  type: zscore
+
+detection:
+  vv_thd: -2.5
+  vh_thd: -2.5
+  rel_slope_thd: 20
+
+read:
+  overview_level: null       # int for MPC (e.g. 0); ignored by OPERASource
+  max_workers: 6
+
+slope:
+  dem_overview: 0
+  buffer: 500
+
+output_dir: output/my_run
+slope_dir: resources/slope
+```
+
+Each AOI is skipped automatically if it already fully completed for the
+exact same `dry_years`/`wet_duration` in a prior run (see
+`flood_mapper.is_fully_processed`) -- safe to re-run the same config
+after a partial failure without redoing finished tiles.
+
+## Output
+
+For each AOI, under `output_dir/tile<id>/`:
+
+- `mean_std/` -- the dry-season Z-score baseline (NetCDF).
+- `flood_raster/floodextentstacked_<tag>/` -- one classified flood raster
+  per observed wet-season date.
+- `flood_raster/monthlyadded_<tag>/` -- per-month flood-day-count
+  rasters, the final deliverable most downstream analysis uses.
+
+All GeoTIFF output is written as Cloud Optimized GeoTIFF (tiled,
+DEFLATE-compressed, with overviews).

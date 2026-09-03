@@ -4,10 +4,14 @@ title: "AutoFloods"
 
 ## Overview
 
-AutoFloods is a Python package for automated, large-area flood mapping
-from Sentinel-1 SAR imagery. It detects flooded pixels with per-pixel
-Z-score anomaly detection: a dry-season VV/VH backscatter baseline (mean
-+ standard deviation) is fit per tile, and wet-season scenes are flagged
+AutoFloods maps flooded areas from Sentinel-1 SAR (radar) satellite
+imagery, for a region and time period you specify -- producing
+per-date and per-month flood-extent rasters, without requiring a
+background in radar remote sensing to use.
+
+Under the hood, it detects flooded pixels with per-pixel Z-score
+anomaly detection: a dry-season VV/VH backscatter baseline (mean +
+standard deviation) is fit per tile, and wet-season scenes are flagged
 flooded wherever backscatter drops significantly below that baseline,
 with a terrain-slope mask to suppress false positives on steep ground.
 
