@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0a8
+
+- **Fixed a critical bug**: `OPERASource.authenticate()` passed a
+  `timeout=` keyword argument to `pystac_client.Client.open()` that the
+  pinned `pystac-client==0.6.1` doesn't support, raising `TypeError` on
+  every `OPERASource` use -- including the documented Getting Started
+  quickstart. Present since 0.1.0a1; fixed by dropping the unsupported
+  kwarg.
+
 ## 0.1.0a7
 
 - Corrected the author contact email in package metadata.

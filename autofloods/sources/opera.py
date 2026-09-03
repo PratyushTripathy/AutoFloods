@@ -103,7 +103,12 @@ class OPERASource(STACSource):
         self._dem_source = MPCSource()
 
     def authenticate(self) -> None:
-        self._catalog = pystac_client.Client.open(CMR_ASF_STAC_URL, timeout=(15, 30))
+        # No timeout= here: pinned pystac-client==0.6.1's Client.open()
+        # doesn't accept one (added in a later release) -- passing it
+        # raised TypeError on every call, undetected for 3+ releases
+        # since sources/ had zero test coverage. See CLAUDE.md's Future
+        # To-Dos.
+        self._catalog = pystac_client.Client.open(CMR_ASF_STAC_URL)
 
         self._session = requests.Session()
         netrc_path = os.path.expanduser("~/.netrc")
