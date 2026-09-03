@@ -73,16 +73,15 @@ class MPCSource(STACSource):
                 "volume, but a key raises your rate limit for large-scale runs."
             )
 
+        # No timeout= here: pinned pystac-client==0.6.1's Client.open()
+        # doesn't accept one (added in a later release) -- passing it
+        # raised TypeError on every call. Same bug as OPERASource.authenticate()
+        # (see its comment); found here by the same test-coverage push,
+        # not caught by any release before 0.1.0a9. See CLAUDE.md's Future
+        # To-Dos.
         self._catalog = pystac_client.Client.open(
             "https://planetarycomputer.microsoft.com/api/stac/v1",
             modifier=planetary_computer.sign_inplace,
-            # bound the STAC API's own requests-level HTTP calls (connect
-            # timeout, read timeout) so a stalled search request fails
-            # loudly instead of hanging indefinitely; this is separate
-            # from the GDAL-level timeout used for actual raster reads
-            # (see autofloods.utils.open_rasterio_with_retry), since a
-            # VSI curl hang wouldn't be caught by this alone.
-            timeout=(15, 30),
         )
 
     def search_sentinel1(self, bbox, start_date, end_date):
