@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autofloods"
-version = "0.1.0a9"
+version = "0.1.0a10"
 description = "Automated flood mapping at scale from Sentinel-1 SAR imagery"
 readme = "PYPI_README.md"
 license = { text = "MIT" }
-requires-python = ">=3.9,<3.12"
+requires-python = ">=3.10,<3.14"
 authors = [
     { name = "Pratyush Tripathy", email = "pratkrt@gmail.com" },
 ]
@@ -16,27 +16,28 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "geopandas==0.13.2",
-    "fiona==1.9.6",
+    "geopandas==0.14.4",
+    "fiona==1.10.1",
     "rioxarray==0.14.1",
-    "xarray==2023.6.0",
-    "pandas==1.5.0",
-    "rasterio==1.3.3",
-    "shapely==2.0.1",
-    "numpy==1.23.2",
-    "matplotlib==3.6.0",
-    "xarray-spatial==0.3.7",
+    "xarray==2024.3.0",
+    "pandas==2.2.3",
+    "rasterio==1.3.11",
+    "shapely==2.0.6",
+    "numpy==2.1.0",
+    "matplotlib==3.9.2",
+    "xarray-spatial==0.4.0",
     "pystac==1.7.2",
     "pystac-client==0.6.1",
-    "scikit-image==0.19.3",
-    "scikit-learn==1.1.3",
+    "scikit-image==0.25.0",
+    "scikit-learn==1.5.2",
     "planetary-computer==1.0.0",
-    "dask[array]==2024.4.1",
+    "dask[array,dataframe]==2024.4.1",
     "requests==2.31.0",
     "mgrs==1.5.4",
 ]

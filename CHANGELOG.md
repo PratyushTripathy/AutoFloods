@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.0a10
+
+**Heads up if you're pinning dependencies**: this release moves core
+dependencies to NumPy 2.x and pandas 2.x -- a bigger jump than usual.
+If your own project pins `numpy<2` or `pandas<2` alongside
+`autofloods`, check compatibility before upgrading.
+
+- **Dropped Python 3.9 support.** `requires-python` is now
+  `>=3.10,<3.14`. Forced by NumPy 2.x and scikit-image 0.25+ (both
+  needed for Python 3.12/3.13 support below) themselves requiring
+  Python `>=3.10` -- no single dependency set could span 3.9 through
+  3.13. Python 3.9 also reaches its own upstream end-of-life in
+  October 2025.
+- **Added Python 3.12 and 3.13 support.** Required bumping 12
+  dependencies together: `numpy` (1.23.2 -> 2.1.0), `pandas` (1.5.0 ->
+  2.2.3), `matplotlib` (3.6.0 -> 3.9.2), `rasterio` (1.3.3 -> 1.3.11),
+  `shapely` (2.0.1 -> 2.0.6), `fiona` (1.9.6 -> 1.10.1), `geopandas`
+  (0.13.2 -> 0.14.4), `xarray` (2023.6.0 -> 2024.3.0), `xarray-spatial`
+  (0.3.7 -> 0.4.0), `scikit-image` (0.19.3 -> 0.25.0), `scikit-learn`
+  (1.1.3 -> 1.5.2), and `dask`'s extras (`[array]` -> `[array,dataframe]`).
+  Full test suite (125 tests) verified passing on real, clean installs
+  across Python 3.10, 3.11, 3.12, and 3.13.
+- Python 3.14 was investigated and is explicitly **not** supported yet:
+  `fiona` has not published `cp314` wheels for any release. Will
+  revisit once it does.
+
 ## 0.1.0a9
 
 **Critical fixes -- upgrade if you're on 0.1.0a8 or earlier:**
