@@ -1,5 +1,5 @@
 aoi:
-  grid_shapefile: /home/emlab/projects/current-projects/edge-autofloods/AutoFloods/resources/india_utm_fishnet_buffer.gpkg
+  grid_shapefile: ./resources/india_utm_fishnet_buffer.gpkg
   grid_id_list: [318]
   dry_date_col: dry_month
   id_col: ID
@@ -27,7 +27,7 @@ slope:
   dem_overview: 0
   buffer: 500
 
-output_dir: /home/emlab/projects/current-projects/edge-autofloods/AutoFloods/output/_tier0_backend_check/mpc
-slope_dir: /home/emlab/projects/current-projects/edge-autofloods/AutoFloods/resources/slope
+output_dir: ./output/_tier0_backend_check/mpc
+slope_dir: ./resources/slope
 
 cell_size: 30

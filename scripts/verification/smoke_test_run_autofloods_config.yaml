@@ -2,7 +2,7 @@
 # dir, single tile, single-month wet window, to confirm the standalone
 # config-driven script actually drives a real (not skipped) run correctly.
 aoi:
-  grid_shapefile: /home/emlab/projects/current-projects/edge-autofloods/AutoFloods/resources/india_utm_fishnet_buffer.gpkg
+  grid_shapefile: ./resources/india_utm_fishnet_buffer.gpkg
   grid_id_list: [321]
   dry_date_col: dry_month
   id_col: ID
@@ -30,5 +30,5 @@ slope:
   dem_overview: 0
   buffer: 500
 
-output_dir: /home/emlab/projects/current-projects/edge-autofloods/AutoFloods/output/smoke_test_run_autofloods
-slope_dir: /home/emlab/projects/current-projects/edge-autofloods/AutoFloods/resources/slope
+output_dir: ./output/smoke_test_run_autofloods
+slope_dir: ./resources/slope

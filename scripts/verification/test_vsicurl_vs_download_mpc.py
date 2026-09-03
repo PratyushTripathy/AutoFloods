@@ -22,7 +22,9 @@ import sys
 import tempfile
 import time
 
-sys.path.append('/home/emlab/projects/current-projects/edge-autofloods/AutoFloods')
+import pathlib as _pathlib
+BASE = str(_pathlib.Path(__file__).resolve().parents[2])  # repo root (scripts/verification/<this file>)
+sys.path.append(BASE)
 
 import rasterio
 import requests

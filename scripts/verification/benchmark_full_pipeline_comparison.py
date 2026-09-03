@@ -30,7 +30,9 @@ import os
 import time
 import concurrent.futures
 
-sys.path.append('/home/emlab/projects/current-projects/edge-autofloods/AutoFloods')
+import pathlib as _pathlib
+BASE = str(_pathlib.Path(__file__).resolve().parents[2])  # repo root (scripts/verification/<this file>)
+sys.path.append(BASE)
 
 import numpy as np
 import geopandas as gpd
@@ -43,7 +45,6 @@ import autofloods.preprocessing as preprocessing
 import autofloods.postprocessing as postprocessing
 import autofloods.utils as utils
 
-BASE = '/home/emlab/projects/current-projects/edge-autofloods/AutoFloods'
 AOI_ID = 321
 MAX_WORKERS = 8
 

@@ -11,15 +11,17 @@ manuscript can report a concrete resumed-vs-cold-run wall-clock comparison.
 import sys
 import time
 
-sys.path.append('/home/emlab/projects/current-projects/edge-autofloods/AutoFloods')
+import pathlib as _pathlib
+BASE = str(_pathlib.Path(__file__).resolve().parents[2])  # repo root (scripts/verification/<this file>)
+sys.path.append(BASE)
 
 from autofloods import flood_mapper
 from autofloods.sources import OPERASource
 from autofloods.detectors import ZScoreDetector
 
-GRID_SHAPEFILE = '/home/emlab/projects/current-projects/edge-autofloods/AutoFloods/resources/india_utm_fishnet_buffer.gpkg'
-OUTPUT_DIR = '/home/emlab/projects/current-projects/edge-autofloods/AutoFloods/output/_tier0_resumability/tile318'
-SLOPE_DIR = '/home/emlab/projects/current-projects/edge-autofloods/AutoFloods/resources/slope'
+GRID_SHAPEFILE = f'{BASE}/resources/india_utm_fishnet_buffer.gpkg'
+OUTPUT_DIR = f'{BASE}/output/_tier0_resumability/tile318'
+SLOPE_DIR = f'{BASE}/resources/slope'
 TILE_ID = 318
 
 

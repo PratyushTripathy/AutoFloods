@@ -9,7 +9,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-BASE = '/home/emlab/projects/current-projects/edge-autofloods/AutoFloods'
+import pathlib as _pathlib
+BASE = str(_pathlib.Path(__file__).resolve().parents[2])  # repo root (scripts/verification/<this file>)
 OUTPUT_ROOT = f'{BASE}/output/bihar_2024'
 PLOT_DIR = f'{OUTPUT_ROOT}/summary_plots'
 os.makedirs(PLOT_DIR, exist_ok=True)

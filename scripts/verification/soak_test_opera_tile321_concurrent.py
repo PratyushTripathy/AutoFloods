@@ -20,7 +20,9 @@ import sys
 import time
 import concurrent.futures
 
-sys.path.append('/home/emlab/projects/current-projects/edge-autofloods/AutoFloods')
+import pathlib as _pathlib
+BASE = str(_pathlib.Path(__file__).resolve().parents[2])  # repo root (scripts/verification/<this file>)
+sys.path.append(BASE)
 
 from autofloods.sources import OPERASource
 from autofloods.preprocessing import read_sentinel1_stac

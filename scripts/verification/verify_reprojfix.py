@@ -5,11 +5,12 @@ production pipeline; safe to delete once the fix is confirmed."""
 import sys
 import time
 
-sys.path.append('/home/emlab/projects/current-projects/edge-autofloods/AutoFloods')
+import pathlib as _pathlib
+BASE = str(_pathlib.Path(__file__).resolve().parents[2])  # repo root (scripts/verification/<this file>)
+sys.path.append(BASE)
 from autofloods import flood_mapper
 from autofloods.sources import OPERASource
 
-BASE = '/home/emlab/projects/current-projects/edge-autofloods/AutoFloods'
 AOI_ID = 321
 
 fm = flood_mapper(

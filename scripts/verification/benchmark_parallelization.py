@@ -34,7 +34,9 @@ import concurrent.futures
 import multiprocessing
 import datetime
 
-sys.path.append('/home/emlab/projects/current-projects/edge-autofloods/AutoFloods')
+import pathlib as _pathlib
+BASE = str(_pathlib.Path(__file__).resolve().parents[2])  # repo root (scripts/verification/<this file>)
+sys.path.append(BASE)
 
 import numpy as np
 import psutil
@@ -62,7 +64,7 @@ os.environ.setdefault('GDAL_CACHEMAX', '512')
 ALLOCATED_CPUS = int(os.environ.get('SLURM_CPUS_PER_TASK', multiprocessing.cpu_count()))
 
 AOI_ID = 321
-GRID = '/home/emlab/projects/current-projects/edge-autofloods/AutoFloods/resources/india_utm_fishnet_buffer.gpkg'
+GRID = f'{BASE}/resources/india_utm_fishnet_buffer.gpkg'
 BBOX = {
     'type': 'Polygon',
     'coordinates': [[

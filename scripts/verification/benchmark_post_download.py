@@ -36,7 +36,9 @@ import multiprocessing
 import concurrent.futures
 import datetime
 
-sys.path.append('/home/emlab/projects/current-projects/edge-autofloods/AutoFloods')
+import pathlib as _pathlib
+BASE = str(_pathlib.Path(__file__).resolve().parents[2])  # repo root (scripts/verification/<this file>)
+sys.path.append(BASE)
 
 import numpy as np
 import geopandas as gpd
@@ -47,7 +49,7 @@ from autofloods.sources import OPERASource
 from autofloods.utils import decibel_to_linear, export_xarray
 
 AOI_ID = 321
-GRID = '/home/emlab/projects/current-projects/edge-autofloods/AutoFloods/resources/india_utm_fishnet_buffer.gpkg'
+GRID = f'{BASE}/resources/india_utm_fishnet_buffer.gpkg'
 BBOX = {
     'type': 'Polygon',
     'coordinates': [[
