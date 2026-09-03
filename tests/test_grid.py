@@ -109,10 +109,39 @@ class TestMultiZoneEdgeCases:
         bands = {z[-1] for z in grid['zone']}
         assert bands == {'Q', 'R'}
 
-    def test_southern_hemisphere_raises(self):
+    def test_southern_hemisphere_aoi_produces_correct_tiles(self):
+        """
+        Southern Hemisphere support (fixed 2026-09-03, see CLAUDE.md's
+        Future To-Dos): generate_grid() used to raise NotImplementedError
+        here. Now it must produce tiles in the correct Southern UTM CRS
+        (EPSG:327xx), not just succeed.
+        """
         aoi = box(30.0, -5.0, 31.0, -4.0)
-        with pytest.raises(NotImplementedError):
-            generate_grid(aoi, mode='mgrs')
+        grid = generate_grid(aoi, mode='mgrs')
+        assert len(grid) > 0
+
+        # zone 36 covers 30E-36E; -5 to -4 latitude is MGRS band 'M' (Southern)
+        assert set(grid['zone']) == {'36M'}
+
+        from autofloods.utils import zone_to_epsg
+        epsg = zone_to_epsg(grid['zone'].iloc[0])
+        assert epsg == 'EPSG:32736'
+
+        # confirm tiles actually reproject cleanly and land at Southern
+        # UTM's false-northing convention (>0, well above the equator's
+        # 10,000,000m origin minus the AOI's ~500km southward extent)
+        utm_bounds = grid.to_crs(epsg).total_bounds
+        assert utm_bounds[1] > 9_000_000  # miny
+
+    def test_equator_straddling_aoi_produces_both_hemispheres(self):
+        aoi = box(30.0, -0.5, 30.5, 0.5)
+        grid = generate_grid(aoi, mode='mgrs')
+        bands = {z[-1] for z in grid['zone']}
+        assert bands == {'M', 'N'}  # M = Southern, N = Northern
+
+        from autofloods.utils import zone_to_epsg
+        epsgs = {zone_to_epsg(z) for z in grid['zone']}
+        assert epsgs == {'EPSG:32736', 'EPSG:32636'}
 
 
 class TestSchemaCompatibility:

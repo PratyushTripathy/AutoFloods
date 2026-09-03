@@ -17,11 +17,10 @@ Two modes:
 
 Output matches the schema flood_mapper expects from a grid_shapefile:
 an id_col (default 'ID', sequential int), a 'zone' column (UTM zone
-number + MGRS latitude-band letter, e.g. "43R" -- see
-preprocessing.clip_xarray_using_id, which strips the last character to
-resolve EPSG:326<zone>; only the Northern Hemisphere is supported,
-matching that existing limitation), a dry_date_col (default
-'dry_month'), and polygon geometry in EPSG:4326.
+number + MGRS latitude-band letter, e.g. "43R" or "43C" for a
+Southern-Hemisphere tile -- see utils.zone_to_epsg, which resolves
+this to EPSG:326<zone> or EPSG:327<zone> from the band letter), a
+dry_date_col (default 'dry_month'), and polygon geometry in EPSG:4326.
 """
 
 import math
@@ -85,22 +84,41 @@ def _resolve_aoi(aoi):
     return unary_union(gdf.geometry.values)
 
 
-def _tiles_for_zone(zone_number, aoi_geom_4326, tile_size_m):
+def _tiles_for_zone(zone_number, hemisphere, aoi_geom_4326, tile_size_m):
     """
     Fishnet of tile_size_m x tile_size_m squares, aligned to multiples
-    of tile_size_m in EPSG:326<zone_number>, covering the part of
-    aoi_geom_4326 that falls inside this UTM zone's own longitude
-    strip. Returns a list of shapely boxes in EPSG:326<zone_number>
-    (empty if the AOI doesn't reach into this zone).
+    of tile_size_m in the UTM CRS for (zone_number, hemisphere),
+    covering the part of aoi_geom_4326 that falls inside this UTM
+    zone's own longitude strip AND this hemisphere's latitude range
+    (0 to 84N, or 80S to 0). Northern and Southern UTM for the same
+    zone number are different EPSG codes (different false-northing
+    conventions), so the AOI must be split by hemisphere before
+    reprojecting, not just relabeled afterward.
+
+    Parameters
+    ----------
+    hemisphere : {'N', 'S'}
+
+    Returns
+    -------
+    (tiles, epsg) : list of shapely boxes in `epsg` (empty if the AOI
+        doesn't reach into this zone/hemisphere), and the EPSG code
+        used.
     """
     zone_west = -180 + (zone_number - 1) * 6
     zone_east = zone_west + 6
-    zone_strip = box(zone_west, -80, zone_east, 84)
+    if hemisphere == 'N':
+        lat_min, lat_max = 0, 84
+        epsg = f"EPSG:326{zone_number}"
+    else:
+        lat_min, lat_max = -80, 0
+        epsg = f"EPSG:327{zone_number}"
+
+    zone_strip = box(zone_west, lat_min, zone_east, lat_max)
     aoi_in_zone = aoi_geom_4326.intersection(zone_strip)
     if aoi_in_zone.is_empty:
-        return []
+        return [], epsg
 
-    epsg = f"EPSG:326{zone_number}"
     aoi_utm = gpd.GeoSeries([aoi_in_zone], crs='EPSG:4326').to_crs(epsg).iloc[0]
 
     minx, miny, maxx, maxy = aoi_utm.bounds
@@ -115,7 +133,7 @@ def _tiles_for_zone(zone_number, aoi_geom_4326, tile_size_m):
             cell = box(x, y, x + tile_size_m, y + tile_size_m)
             if cell.intersects(aoi_utm):
                 tiles.append(cell)
-    return tiles
+    return tiles, epsg
 
 
 def generate_grid(aoi, mode='mgrs', tile_size_km=None, output_path=None,
@@ -182,13 +200,12 @@ def generate_grid(aoi, mode='mgrs', tile_size_km=None, output_path=None,
         'mgrs_tile' (the true MGRS 100km-square label, e.g. "43RGM" --
         informational; id_col is still the sequential int flood_mapper
         filters on). CRS EPSG:4326, matching the existing
-        resources/india_utm_fishnet_buffer.gpkg convention.
-
-    Only the Northern Hemisphere is currently supported, matching an
-    existing limitation in preprocessing.clip_xarray_using_id (it
-    always resolves a tile's UTM zone to EPSG:326<zone>, never
-    EPSG:327<zone> for the Southern Hemisphere) -- see CLAUDE.md's
-    Future To-Dos for tracking a fix.
+        resources/india_utm_fishnet_buffer.gpkg convention. An AOI
+        that straddles the equator produces tiles in both hemispheres
+        for the zone(s) it spans -- Northern and Southern UTM for the
+        same zone number are different EPSG codes (see
+        utils.zone_to_epsg), so each tile is generated in the correct
+        one for its own centroid, not just relabeled afterward.
     """
     if mode not in ('mgrs', 'utm_fishnet'):
         raise ValueError(f"mode must be 'mgrs' or 'utm_fishnet', got {mode!r}")
@@ -209,45 +226,41 @@ def generate_grid(aoi, mode='mgrs', tile_size_km=None, output_path=None,
 
     aoi_geom = _resolve_aoi(aoi)
     minx, miny, maxx, maxy = aoi_geom.bounds
-    if miny < 0:
-        raise NotImplementedError(
-            "generate_grid() only supports Northern Hemisphere AOIs "
-            "right now, matching an existing limitation in "
-            "preprocessing.clip_xarray_using_id (it hardcodes "
-            "EPSG:326xx and never resolves a Southern-Hemisphere UTM "
-            "EPSG code from the zone field). See CLAUDE.md's Future "
-            "To-Dos."
-        )
 
     zone_min = _utm_zone_number(minx)
     zone_max = _utm_zone_number(maxx)
+    hemispheres = []
+    if maxy >= 0:
+        hemispheres.append('N')
+    if miny < 0:
+        hemispheres.append('S')
 
     mgrs_converter = _mgrs.MGRS() if mode == 'mgrs' else None
 
     rows = []
     tid = 1
     for zone_number in range(zone_min, zone_max + 1):
-        tiles_utm = _tiles_for_zone(zone_number, aoi_geom, tile_size_m)
-        if not tiles_utm:
-            continue
+        for hemisphere in hemispheres:
+            tiles_utm, epsg = _tiles_for_zone(zone_number, hemisphere, aoi_geom, tile_size_m)
+            if not tiles_utm:
+                continue
 
-        epsg = f"EPSG:326{zone_number}"
-        tiles_4326 = gpd.GeoSeries(tiles_utm, crs=epsg).to_crs(epsg=4326)
+            tiles_4326 = gpd.GeoSeries(tiles_utm, crs=epsg).to_crs(epsg=4326)
 
-        for geom in tiles_4326:
-            centroid = geom.centroid
-            band = _latitude_band(centroid.y)
-            row = {
-                id_col: tid,
-                'zone': f"{zone_number}{band}",
-                'geometry': geom,
-            }
-            if mode == 'mgrs':
-                row['mgrs_tile'] = mgrs_converter.toMGRS(
-                    centroid.y, centroid.x, MGRSPrecision=0
-                )
-            rows.append(row)
-            tid += 1
+            for geom in tiles_4326:
+                centroid = geom.centroid
+                band = _latitude_band(centroid.y)
+                row = {
+                    id_col: tid,
+                    'zone': f"{zone_number}{band}",
+                    'geometry': geom,
+                }
+                if mode == 'mgrs':
+                    row['mgrs_tile'] = mgrs_converter.toMGRS(
+                        centroid.y, centroid.x, MGRSPrecision=0
+                    )
+                rows.append(row)
+                tid += 1
 
     if not rows:
         raise ValueError(

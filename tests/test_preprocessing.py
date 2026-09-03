@@ -116,26 +116,16 @@ class TestClipXarrayUsingId:
         assert with_buffer.sizes['x'] > no_buffer.sizes['x']
         assert with_buffer.sizes['y'] > no_buffer.sizes['y']
 
-    def test_northern_hemisphere_epsg_prefix_is_hardcoded(self, tmp_path):
+    def test_resolves_southern_hemisphere_epsg_from_band_letter(self, tmp_path):
         """
-        Documents CURRENT behavior of the line:
-            tile_utm_zone = 'EPSG:326{}'.format(gdf['zone'].values[0][:-1])
-        This always builds an EPSG:326xx (Northern Hemisphere) code from
-        the zone's leading digits, regardless of what the zone string's
-        actual hemisphere is -- there is no branch on the MGRS latitude
-        band letter (or any other hemisphere indicator) to select
-        EPSG:327xx (Southern Hemisphere) instead.
+        clip_xarray_using_id resolves the UTM EPSG prefix via
+        utils.zone_to_epsg, which reads the MGRS latitude band letter
+        to pick EPSG:326xx (Northern, bands N-X) vs EPSG:327xx
+        (Southern, bands C-M) -- it no longer hardcodes 326 regardless
+        of hemisphere (see CLAUDE.md's Future To-Dos, fixed 2026-09-03).
 
-        Zone '45C' below uses an MGRS latitude band letter ('C') that
-        denotes the southernmost band (would be Southern Hemisphere for
-        a real MGRS tile) purely to make the intent obvious -- the
-        function does not actually interpret the letter at all, it just
-        strips the last character. So this assertion holds for the
-        current implementation, but is a known bug (Southern Hemisphere
-        AOIs silently get a Northern Hemisphere CRS) that has a separate,
-        still-pending fix planned. When that fix lands, this test will
-        need to be updated to assert EPSG:327xx for a southern zone
-        instead.
+        Zone '45C' uses band 'C', the southernmost MGRS band, so this
+        must resolve to EPSG:32745, not EPSG:32645.
         """
         grid_path = _make_grid_file(tmp_path, zone='45C')
         data = _make_source_dataarray()
@@ -148,9 +138,7 @@ class TestClipXarrayUsingId:
             cell_size=100,
         )
 
-        # BUG (pending fix): should arguably be EPSG:32745 for a
-        # southern-hemisphere zone, but today always comes out 326xx.
-        assert result.rio.crs.to_epsg() == 32645
+        assert result.rio.crs.to_epsg() == 32745
 
     def test_slope_true_uses_ref_xarray_bounds(self, tmp_path):
         grid_path = _make_grid_file(tmp_path)

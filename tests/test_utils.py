@@ -332,3 +332,47 @@ class TestNumpyToXarray:
         ref = xr.DataArray(np.zeros((3, 3)), dims=("y", "x"))
         with pytest.raises(ValueError):
             utils.numpy_to_xarray(np.zeros(3), ref)
+
+
+class TestZoneToEpsg:
+    """
+    zone_to_epsg resolves a grid_shapefile `zone` string to the
+    correct UTM EPSG code from its MGRS latitude-band letter --
+    EPSG:326xx (Northern, bands N-X) or EPSG:327xx (Southern, bands
+    C-M). Centralizes what used to be four independent hardcoded
+    EPSG:326xx call sites (autofloods.__init__.project_flood_raster,
+    preprocessing.reproject_clip_stac, preprocessing.clip_xarray_using_id,
+    utils.gpd_to_json), all of which silently assumed the Northern
+    Hemisphere regardless of the zone's actual band letter (fixed
+    2026-09-03, see CLAUDE.md's Future To-Dos).
+    """
+
+    def test_northern_band_resolves_to_326(self):
+        assert utils.zone_to_epsg('45R') == 'EPSG:32645'
+
+    def test_northern_boundary_band_n(self):
+        # 'N' is the first Northern band (0-8N)
+        assert utils.zone_to_epsg('45N') == 'EPSG:32645'
+
+    def test_southern_band_resolves_to_327(self):
+        assert utils.zone_to_epsg('45C') == 'EPSG:32745'
+
+    def test_southern_boundary_band_m(self):
+        # 'M' is the last Southern band (8S-0)
+        assert utils.zone_to_epsg('45M') == 'EPSG:32745'
+
+    def test_multi_digit_zone_number(self):
+        assert utils.zone_to_epsg('7Q') == 'EPSG:32607'
+
+    def test_lowercase_band_letter_accepted(self):
+        assert utils.zone_to_epsg('45r') == 'EPSG:32645'
+
+    def test_unrecognized_band_letter_raises(self):
+        with pytest.raises(ValueError):
+            utils.zone_to_epsg('45I')  # 'I' is never a valid MGRS band
+
+    def test_all_valid_bands_resolve_without_error(self):
+        for band in 'CDEFGHJKLM':  # Southern bands
+            assert utils.zone_to_epsg(f'31{band}') == 'EPSG:32731'
+        for band in 'NPQRSTUVWX':  # Northern bands
+            assert utils.zone_to_epsg(f'31{band}') == 'EPSG:32631'

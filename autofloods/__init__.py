@@ -1087,10 +1087,9 @@ class flood_mapper():
         the pipeline; this fixes that up afterward from the grid
         shapefile's authoritative `zone` column instead.
         """
-        # Define the correct projection (in this case, WGS 84)
+        # Define the correct projection
         gdf = gpd.read_file(self.grid_shapefile_path)
-        zone = int(gdf.loc[gdf.ID == tile_id].zone.values[0][:2])
-        new_crs = f'EPSG:326{zone}'
+        new_crs = utils.zone_to_epsg(gdf.loc[gdf.ID == tile_id].zone.values[0])
 
         # Open the input GeoTIFF file and get its metadata. Since
         # export_xarray() started writing COGs (see autofloods.utils),

@@ -8,7 +8,7 @@ import numpy as np
 import xrspatial
 from sklearn.feature_extraction import image
 from copy import deepcopy
-from ..utils import decibel_to_linear, default_max_workers
+from ..utils import decibel_to_linear, default_max_workers, zone_to_epsg
 import concurrent.futures
 
 
@@ -87,7 +87,7 @@ def reproject_clip_stac(reprojected_dict, aoi_scene_dict, grid_shapefile_path, i
     gdf = gdf.loc[gdf['ID'].isin([id])]
 
     # extract the UTM zone from the tile, reproject the GDF to UTM
-    tile_utm_zone = 'EPSG:326{}'.format(gdf['zone'].values[0][:-1])
+    tile_utm_zone = zone_to_epsg(gdf['zone'].values[0])
     gdf = gdf.to_crs(tile_utm_zone)
 
     def _reproject_clip_one(stac_id):
@@ -214,7 +214,7 @@ def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray, b
     # extract target extent from the grid polygon
     gdf = gpd.read_file(grid_shapefile_path)
     gdf = gdf.loc[gdf['ID'].isin([aoi_id])]
-    tile_utm_zone = 'EPSG:326{}'.format(gdf['zone'].values[0][:-1])
+    tile_utm_zone = zone_to_epsg(gdf['zone'].values[0])
     gdf = gdf.to_crs(tile_utm_zone)
 
     # perform buffer if required (for slope smoothing using kernel)
