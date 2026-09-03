@@ -1,10 +1,12 @@
 # tests/test_authenticate.py
 
 """
-Tests for autofloods.authenticate (deprecated standalone sign_in(),
-superseded by autofloods.sources.MPCSource but kept importable for
-backward compatibility) -- all network calls mocked, no live
-credentials required.
+Tests for autofloods.authenticate: the deprecated standalone sign_in()
+(superseded by autofloods.sources.MPCSource but kept importable for
+backward compatibility) and setup_earthdata_login() (the recommended
+way to configure NASA Earthdata Login credentials for OPERASource) --
+all network calls mocked, no live credentials required, no real
+~/.netrc touched (tests always pass an explicit netrc_path=tmp_path).
 
 This module has the same shape of code as autofloods.sources.mpc's
 authenticate(), which shipped a real bug for multiple releases:
@@ -17,7 +19,7 @@ undetected a third time.
 
 from unittest.mock import MagicMock, patch
 
-from autofloods.authenticate import sign_in
+from autofloods.authenticate import sign_in, setup_earthdata_login
 
 
 class TestSignInAuthenticate:
@@ -60,3 +62,96 @@ class TestSignInAuthenticate:
         with patch("autofloods.authenticate.pystac_client.Client.open", return_value=fake_catalog):
             result = sign_in()
         assert result is fake_catalog
+
+
+class TestSetupEarthdataLogin:
+    def test_prompts_when_credentials_not_given(self, tmp_path):
+        netrc_path = tmp_path / ".netrc"
+        with patch("autofloods.authenticate.input", return_value="alice", create=True) as mock_input, \
+             patch("autofloods.authenticate.getpass.getpass", return_value="s3cret") as mock_getpass:
+            setup_earthdata_login(netrc_path=str(netrc_path))
+
+        mock_input.assert_called_once()
+        mock_getpass.assert_called_once()
+        text = netrc_path.read_text()
+        assert "machine urs.earthdata.nasa.gov" in text
+        assert "login alice" in text
+        assert "password s3cret" in text
+
+    def test_skips_prompt_when_credentials_given_directly(self, tmp_path):
+        netrc_path = tmp_path / ".netrc"
+        with patch("autofloods.authenticate.input", create=True) as mock_input, \
+             patch("autofloods.authenticate.getpass.getpass") as mock_getpass:
+            setup_earthdata_login(username="bob", password="hunter2", netrc_path=str(netrc_path))
+
+        mock_input.assert_not_called()
+        mock_getpass.assert_not_called()
+        text = netrc_path.read_text()
+        assert "login bob" in text
+        assert "password hunter2" in text
+
+    def test_preserves_unrelated_existing_entries(self, tmp_path):
+        netrc_path = tmp_path / ".netrc"
+        netrc_path.write_text("machine example.com\n  login someone\n  password pw\n")
+
+        setup_earthdata_login(username="bob", password="hunter2", netrc_path=str(netrc_path))
+
+        text = netrc_path.read_text()
+        assert "machine example.com" in text
+        assert "login someone" in text
+        assert "machine urs.earthdata.nasa.gov" in text
+        assert "login bob" in text
+
+    def test_replaces_existing_earthdata_block_in_place(self, tmp_path):
+        netrc_path = tmp_path / ".netrc"
+        netrc_path.write_text(
+            "machine urs.earthdata.nasa.gov\n  login old_user\n  password old_pw\n"
+        )
+
+        setup_earthdata_login(username="new_user", password="new_pw", netrc_path=str(netrc_path))
+
+        text = netrc_path.read_text()
+        assert text.count("machine urs.earthdata.nasa.gov") == 1
+        assert "old_user" not in text
+        assert "old_pw" not in text
+        assert "login new_user" in text
+        assert "password new_pw" in text
+
+    def test_sets_permissions_to_owner_only_on_posix(self, tmp_path):
+        netrc_path = tmp_path / ".netrc"
+        with patch("autofloods.authenticate.platform.system", return_value="Linux"), \
+             patch("autofloods.authenticate.os.chmod") as mock_chmod:
+            setup_earthdata_login(username="bob", password="hunter2", netrc_path=str(netrc_path))
+
+        mock_chmod.assert_called_once_with(str(netrc_path), 0o600)
+
+    def test_skips_chmod_on_windows(self, tmp_path):
+        netrc_path = tmp_path / ".netrc"
+        with patch("autofloods.authenticate.platform.system", return_value="Windows"), \
+             patch("autofloods.authenticate.os.chmod") as mock_chmod:
+            setup_earthdata_login(username="bob", password="hunter2", netrc_path=str(netrc_path))
+
+        mock_chmod.assert_not_called()
+
+    def test_returns_netrc_path(self, tmp_path):
+        netrc_path = tmp_path / ".netrc"
+        result = setup_earthdata_login(username="bob", password="hunter2", netrc_path=str(netrc_path))
+        assert result == str(netrc_path)
+
+    def test_verify_failure_raises_runtime_error(self, tmp_path):
+        netrc_path = tmp_path / ".netrc"
+        with patch("autofloods.authenticate._read_netrc_text", return_value=""):
+            try:
+                setup_earthdata_login(username="bob", password="hunter2", netrc_path=str(netrc_path))
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("expected RuntimeError when verification fails")
+
+    def test_no_verify_call_skips_check(self, tmp_path):
+        netrc_path = tmp_path / ".netrc"
+        with patch("autofloods.authenticate._read_netrc_text", return_value=""):
+            result = setup_earthdata_login(
+                username="bob", password="hunter2", netrc_path=str(netrc_path), verify=False
+            )
+        assert result == str(netrc_path)

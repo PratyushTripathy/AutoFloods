@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.0a11
+
+Two usability fixes, both surfaced by real first-time-user testing
+(including on Google Colab):
+
+- **Added `autofloods.authenticate.setup_earthdata_login()`**, the
+  recommended way to set up NASA Earthdata Login credentials for
+  `OPERASource`. Prompts for a username (`input()`) and password
+  (`getpass.getpass()`, never echoed or logged) -- or accepts them
+  directly as arguments for scripted/non-interactive use -- and
+  writes/updates the `urs.earthdata.nasa.gov` entry in `~/.netrc`
+  without disturbing any other entries already there. Sets the file to
+  owner-only permissions (`chmod 600`, skipped on Windows). The manual
+  `.netrc` setup instructions in the docs remain as an alternative for
+  anyone who prefers editing the file directly.
+- **`OPERASource` now fails with a clear, actionable error** if the
+  `gdalbuildvrt` CLI tool isn't installed, instead of a raw
+  `FileNotFoundError` from deep inside a `subprocess` call. `rasterio`'s
+  pip wheel bundles its own GDAL library but doesn't expose the CLI
+  binaries, so this is a real gap for a plain `pip install autofloods`
+  user -- most visibly on Google Colab. The new error message points
+  directly at the fix (`apt-get install gdal-bin` / `conda install -c
+  conda-forge gdal`), and this system dependency is now documented
+  prominently in the Installation section of the docs.
+
 ## 0.1.0a10
 
 **Heads up if you're pinning dependencies**: this release moves core

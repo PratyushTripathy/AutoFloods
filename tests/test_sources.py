@@ -150,6 +150,23 @@ class TestOPERASourceContract:
         assert result == ["fake_item"]
 
 
+class TestOPERASourceBuildVrt:
+    def test_raises_clear_error_when_gdalbuildvrt_missing(self):
+        src = OPERASource()
+        with patch("autofloods.sources.opera.shutil.which", return_value=None):
+            with pytest.raises(RuntimeError, match="gdalbuildvrt"):
+                src._build_vrt(["a.tif", "b.tif"])
+
+    def test_calls_subprocess_when_gdalbuildvrt_present(self):
+        src = OPERASource()
+        with patch("autofloods.sources.opera.shutil.which", return_value="/usr/bin/gdalbuildvrt"), \
+             patch("autofloods.sources.opera.subprocess.run") as mock_run:
+            src._build_vrt(["a.tif", "b.tif"])
+        assert mock_run.called
+        args, _ = mock_run.call_args
+        assert args[0][0] == "gdalbuildvrt"
+
+
 def _fake_item(item_id, has_vv=True, has_vh=True):
     from shapely.geometry import box, mapping
 

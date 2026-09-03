@@ -21,8 +21,25 @@ Credentials depend on which `STACSource` you use, and only one is needed:
   a config file. Never commit the key value itself anywhere in the repo.
 - **`OPERASource`** (NASA OPERA RTC-S1 via ASF/CMR) requires a NASA
   Earthdata Login. Create a free account at
-  [urs.earthdata.nasa.gov](https://urs.earthdata.nasa.gov), then follow
-  NASA's own `.netrc` setup instructions:
+  [urs.earthdata.nasa.gov](https://urs.earthdata.nasa.gov), then set up
+  a `~/.netrc` entry for it. The recommended way is the built-in helper:
+  ```python
+  from autofloods.authenticate import setup_earthdata_login
+
+  setup_earthdata_login()
+  ```
+  This prompts for your username (`input()`) and password
+  (`getpass.getpass()`, never echoed or logged), writes/updates the
+  `urs.earthdata.nasa.gov` entry in `~/.netrc` without touching any
+  other entries already there, and restricts the file to owner-only
+  permissions (`chmod 600`, skipped on Windows). For scripted or
+  non-interactive setup, pass credentials directly instead of prompting
+  (e.g. from an environment variable or secrets manager):
+  ```python
+  setup_earthdata_login(username=my_username, password=my_password)
+  ```
+  Alternatively, you can set up `~/.netrc` by hand, following NASA's own
+  `.netrc` setup instructions:
   [urs.earthdata.nasa.gov/documentation/for_users/data_access/curl_and_wget](https://urs.earthdata.nasa.gov/documentation/for_users/data_access/curl_and_wget).
   In short, add an entry to `~/.netrc`:
   ```
@@ -35,8 +52,13 @@ Credentials depend on which `STACSource` you use, and only one is needed:
   ```bash
   chmod 600 ~/.netrc
   ```
-  `requests` picks this up automatically on the OAuth redirect; no
-  environment variable or code change needed.
+  Either way, `requests` picks this up automatically on the OAuth
+  redirect; no environment variable or code change needed elsewhere.
+
+  `OPERASource` also requires the GDAL command-line tools
+  (`gdalbuildvrt`) to be installed separately -- see
+  [Installation](index.qmd#installation) for the `apt-get`/`conda`
+  commands.
 
 ## Running AutoFloods
 

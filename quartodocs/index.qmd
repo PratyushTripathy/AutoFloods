@@ -53,6 +53,25 @@ request rate limit); `OPERASource` requires a NASA Earthdata Login entry
 in `~/.netrc`. See [Getting Started](getting-started.qmd#authentication)
 for setup steps.
 
+**System dependency for `OPERASource`**: mosaicking uses the GDAL
+command-line tools (`gdalbuildvrt`), which `pip install` does **not**
+provide -- `rasterio`'s pip wheel bundles its own GDAL library
+internally but doesn't expose the CLI binaries. Install them
+separately:
+
+```bash
+# Debian/Ubuntu, or Google Colab
+apt-get install -y gdal-bin
+
+# conda/mamba (any platform)
+conda install -c conda-forge gdal
+```
+
+See [gdal.org/download.html](https://gdal.org/download.html) for other
+platforms. `MPCSource` does not need this. If `gdalbuildvrt` is missing,
+`OPERASource` raises a clear error pointing back here rather than a raw
+`FileNotFoundError`.
+
 ## Citation
 
 If you use this package (or part of it), please cite:

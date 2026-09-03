@@ -2,6 +2,7 @@
 
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -272,6 +273,16 @@ class OPERASource(STACSource):
 
     def _build_vrt(self, paths):
         """Build a VRT mosaic from local file paths (no /vsicurl/)."""
+        if shutil.which("gdalbuildvrt") is None:
+            raise RuntimeError(
+                "gdalbuildvrt not found -- install GDAL command-line tools "
+                "(e.g. `apt-get install gdal-bin` on Debian/Ubuntu/Colab, "
+                "`conda install -c conda-forge gdal`, or see "
+                "https://gdal.org/download.html for other platforms). "
+                "This is a system dependency separate from the rasterio "
+                "Python bindings pip installs."
+            )
+
         vrt_path = tempfile.NamedTemporaryFile(suffix=".vrt", delete=False).name
 
         subprocess.run(
