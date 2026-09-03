@@ -14,6 +14,7 @@ import autofloods.postprocessing
 import autofloods.mapfloods
 import autofloods.sources as sources
 import autofloods.detectors as detectors
+import autofloods.grid as grid
 from datetime import datetime
 import os, json, shutil
 import concurrent.futures
@@ -65,9 +66,10 @@ class flood_mapper():
     (currently only ZScoreDetector) plug in without changing this class.
     """
 
-    def __init__(self, grid_shapefile, grid_id_list, dry_date_col='dry_month', id_col='ID',
+    def __init__(self, grid_shapefile=None, grid_id_list=None, dry_date_col='dry_month', id_col='ID',
                  dry_years=list(range(2015, 2021)), wet_duration=['2020/07', '2020/09'], slope_dir=None,
-                 source=None, detector=None, output_dir=None, cell_size=30):
+                 source=None, detector=None, output_dir=None, cell_size=30,
+                 aoi=None, grid_mode=None, grid_tile_size_km=None, grid_dry_months=None):
         """
         Construct a flood_mapper and create its output directory tree.
         See the module-level pipeline overview in this class's docstring
@@ -75,10 +77,14 @@ class flood_mapper():
 
         Parameters
         __________
-        grid_shapefile                  : str
+        grid_shapefile                  : str, optional
                                           Path to the shapefile containing grid information.
-        grid_id_list                    : list
-                                          List of grid IDs.
+                                          Required unless `aoi` is given instead, in which case
+                                          a grid is generated on the fly (see `aoi` below).
+        grid_id_list                    : list, optional
+                                          List of grid IDs to process. Required when
+                                          `grid_shapefile` is given; if omitted when a grid is
+                                          generated from `aoi`, defaults to every generated tile.
         dry_date_col                    : str
                                           Column name for dry month information in the shapefile (default: 'dry_month').
         id_col                          : str
@@ -111,6 +117,29 @@ class flood_mapper():
                                           a tile's grid identical across runs/years (default
                                           30 matches OPERA RTC-S1's native resolution; see
                                           preprocessing.clip_xarray_using_id for details).
+        aoi                              : str, geopandas.GeoDataFrame, or shapely geometry, optional
+                                          Area of interest boundary to generate a tiling grid
+                                          from, instead of supplying a pre-made `grid_shapefile`
+                                          (see autofloods.grid.generate_grid, which this calls
+                                          internally). Either `grid_shapefile` or `aoi` must be
+                                          given, not neither. The generated grid is written to
+                                          `resources_base/generated_grid.gpkg` and used as if it
+                                          had been passed via `grid_shapefile`.
+        grid_mode                       : str, optional
+                                          'mgrs' or 'utm_fishnet', passed to generate_grid when
+                                          `aoi` is given. Defaults to 'mgrs' if `source` is an
+                                          OPERASource (OPERA RTC-S1 is natively MGRS-tiled),
+                                          otherwise 'utm_fishnet'.
+        grid_tile_size_km               : float, optional
+                                          Tile size for grid_mode='utm_fishnet', passed to
+                                          generate_grid when `aoi` is given. Ignored for
+                                          grid_mode='mgrs' (always 100km).
+        grid_dry_months                 : str, optional
+                                          Dry-season months (e.g. "04,05") stamped into every
+                                          generated tile's `dry_date_col`, passed to
+                                          generate_grid when `aoi` is given. Required in that
+                                          case -- dry season is climate knowledge that can't be
+                                          derived from AOI geometry alone.
 
         Sets aoi_union/aoi_list (combined and per-AOI search bboxes), normalizes
         dry_years to a contiguous range, and populates already_processed_aoi_ids
@@ -132,8 +161,6 @@ class flood_mapper():
         ...     wet_duration=['2024/07', '2024/10'],
         ... )
         """
-        self.grid_shapefile_path = grid_shapefile
-        self.selected_grid_id = grid_id_list
         self.id_key = id_col
         self.dry_date_col = dry_date_col
         self.source = source if source is not None else sources.MPCSource()
@@ -158,6 +185,43 @@ class flood_mapper():
             os.path.join(self.output_dir, 'slope') if self.output_dir else None
         )
         self.create_out_dirs()
+
+        # grid_shapefile is required unless aoi is given, in which case a
+        # grid is generated on the fly and used in its place -- additive
+        # convenience path, doesn't change the grid_shapefile-based API.
+        if grid_shapefile is None:
+            if aoi is None:
+                raise ValueError(
+                    "Either grid_shapefile or aoi must be given. Pass an "
+                    "existing grid file via grid_shapefile, or an AOI "
+                    "boundary via aoi to generate one on the fly (see "
+                    "autofloods.grid.generate_grid)."
+                )
+            if grid_dry_months is None:
+                raise ValueError(
+                    "grid_dry_months is required when generating a grid "
+                    "from aoi -- dry season is climate knowledge that "
+                    "can't be derived from AOI geometry alone (e.g. "
+                    "grid_dry_months='04,05')."
+                )
+            resolved_mode = grid_mode if grid_mode is not None else (
+                'mgrs' if isinstance(self.source, sources.OPERASource) else 'utm_fishnet'
+            )
+            generated_grid_path = os.path.join(self.resources_base, 'generated_grid.gpkg')
+            generated_grid = grid.generate_grid(
+                aoi, mode=resolved_mode, tile_size_km=grid_tile_size_km,
+                output_path=generated_grid_path, id_col=id_col,
+                dry_date_col=dry_date_col, dry_months=grid_dry_months,
+            )
+            grid_shapefile = generated_grid_path
+            if grid_id_list is None:
+                grid_id_list = generated_grid[id_col].tolist()
+        elif grid_id_list is None:
+            raise ValueError("grid_id_list is required when grid_shapefile is given.")
+
+        self.grid_shapefile_path = grid_shapefile
+        self.selected_grid_id = grid_id_list
+
         self.generate_defaults()
 
     def create_out_dirs(self):

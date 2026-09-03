@@ -42,6 +42,10 @@ quartodoc:
       desc: "The main entry point most users need."
       contents:
         - flood_mapper
+    - title: "Grid generation"
+      desc: "Generate a tiling grid from an AOI when you don't already have one."
+      contents:
+        - grid.generate_grid
     - title: "Data sources"
       desc: "STACSource and its implementations -- how AutoFloods reads Sentinel-1/DEM data."
       contents:

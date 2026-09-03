@@ -37,6 +37,7 @@ dependencies = [
     "planetary-computer==1.0.0",
     "dask[array]==2023.6.0",
     "requests==2.31.0",
+    "mgrs==1.5.4",
 ]
 
 [project.optional-dependencies]
