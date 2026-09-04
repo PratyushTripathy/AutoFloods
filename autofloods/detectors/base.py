@@ -13,14 +13,17 @@ class FloodDetector(ABC):
     """
 
     @abstractmethod
-    def fit_baseline(self, vv_stack: xr.DataArray, vh_stack: xr.DataArray) -> xr.DataArray:
+    def fit_baseline(self, vv_stats: dict, vh_stats: dict) -> xr.DataArray:
         """
-        Given the stacked dry-season VV and VH DataArrays for one tile
-        (as produced by autofloods.preprocessing.stack_images), return
-        whatever per-pixel baseline this method needs (Z-score: mean+std
-        per band). If requires_baseline_fitting is False, this may be a
-        no-op returning an empty/marker DataArray -- callers should check
-        that flag rather than assume this always does real work.
+        Given the dry-season VV and VH per-pixel statistics for one tile
+        (as produced by autofloods.preprocessing.compute_dry_baseline_stats
+        -- each a dict with 'mean' and 'std' DataArray keys, computed via
+        Welford's online algorithm rather than a fully-materialized
+        stack), return whatever per-pixel baseline this method needs
+        (Z-score: mean+std per band). If requires_baseline_fitting is
+        False, this may be a no-op returning an empty/marker DataArray --
+        callers should check that flag rather than assume this always
+        does real work.
         """
 
     @abstractmethod

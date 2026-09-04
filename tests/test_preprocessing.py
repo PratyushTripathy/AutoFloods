@@ -350,3 +350,86 @@ class TestStackImages:
         # constant-fill inputs -> constant-value scenes after regridding
         np.testing.assert_allclose(result['vv_stack'].isel(band=0).values, 1.0, rtol=1e-6)
         np.testing.assert_allclose(result['vh_stack'].isel(band=1).values, 4.0, rtol=1e-6)
+
+
+class TestComputeDryBaselineStats:
+    """
+    compute_dry_baseline_stats() replaces stack_images()-then-.mean()/
+    .std() for generate_mean_std_by_aoi()'s actual baseline fit, folding
+    each scene into a running Welford accumulator instead of holding
+    every scene in memory as one concatenated stack (see its docstring
+    for why). These tests confirm the two are numerically equivalent
+    before relying on the incremental path in production.
+    """
+
+    def test_matches_stack_then_reduce(self, tmp_path):
+        grid_path = _make_grid_file(tmp_path)
+        rng = np.random.default_rng(0)
+        n_scenes = 5
+        clipped_dict = {}
+        for i in range(n_scenes):
+            vv_fill = rng.normal(1.0, 0.1, size=(40, 40))
+            vh_fill = rng.normal(2.0, 0.2, size=(40, 40))
+            # A couple of scenes carry stray large sentinel values (an
+            # upstream nodata artifact), same as compute_dry_baseline_stats()
+            # is documented to mask to NaN before folding -- exercises the
+            # NaN-aware (skipna=True-equivalent) accumulation path, not
+            # just the plain-mean/std case.
+            if i in (1, 3):
+                vv_fill[0:3, 0:3] = 99.0
+            clipped_dict[f'scene{i}'] = {
+                'vv_ds': _make_source_dataarray(fill=vv_fill),
+                'vh_ds': _make_source_dataarray(fill=vh_fill),
+            }
+
+        stacked = preprocessing.stack_images(
+            clipped_dict, grid_path, 'tile1', max_workers=1, cell_size=100,
+        )
+        vv_stack = stacked['vv_stack'].where(stacked['vv_stack'] < 50, np.nan)
+        vh_stack = stacked['vh_stack'].where(stacked['vh_stack'] < 50, np.nan)
+        expected_vv_mean = vv_stack.mean(axis=0)
+        expected_vv_std = vv_stack.std(axis=0)
+        expected_vh_mean = vh_stack.mean(axis=0)
+        expected_vh_std = vh_stack.std(axis=0)
+
+        result = preprocessing.compute_dry_baseline_stats(
+            clipped_dict, grid_path, 'tile1', max_workers=1, cell_size=100,
+        )
+
+        np.testing.assert_allclose(result['vv']['mean'].values, expected_vv_mean.values, rtol=1e-8, atol=1e-10)
+        np.testing.assert_allclose(result['vv']['std'].values, expected_vv_std.values, rtol=1e-8, atol=1e-10)
+        np.testing.assert_allclose(result['vh']['mean'].values, expected_vh_mean.values, rtol=1e-8, atol=1e-10)
+        np.testing.assert_allclose(result['vh']['std'].values, expected_vh_std.values, rtol=1e-8, atol=1e-10)
+
+    def test_grid_ref_has_leading_band_dim_and_crs(self, tmp_path):
+        grid_path = _make_grid_file(tmp_path)
+        clipped_dict = {
+            'scene1': {'vv_ds': _make_source_dataarray(fill=np.full((40, 40), 1.0)),
+                       'vh_ds': _make_source_dataarray(fill=np.full((40, 40), 2.0))},
+        }
+
+        result = preprocessing.compute_dry_baseline_stats(
+            clipped_dict, grid_path, 'tile1', max_workers=1, cell_size=100,
+        )
+
+        assert result['grid_ref'].sizes['band'] == 1
+        assert result['grid_ref'].rio.crs is not None
+        assert 'y' in result['grid_ref'].coords and 'x' in result['grid_ref'].coords
+
+    def test_pixel_nan_in_every_scene_stays_nan(self, tmp_path):
+        grid_path = _make_grid_file(tmp_path)
+        vv_fill = np.full((40, 40), 99.0)  # sentinel in every scene, every pixel
+        vh_fill = np.full((40, 40), 2.0)
+        clipped_dict = {
+            'scene1': {'vv_ds': _make_source_dataarray(fill=vv_fill), 'vh_ds': _make_source_dataarray(fill=vh_fill)},
+            'scene2': {'vv_ds': _make_source_dataarray(fill=vv_fill), 'vh_ds': _make_source_dataarray(fill=vh_fill)},
+        }
+
+        result = preprocessing.compute_dry_baseline_stats(
+            clipped_dict, grid_path, 'tile1', max_workers=1, cell_size=100,
+        )
+
+        assert np.isnan(result['vv']['mean'].values).all()
+        assert np.isnan(result['vv']['std'].values).all()
+        # VH had no sentinel values -- confirms the NaN masking is per-band
+        np.testing.assert_allclose(result['vh']['mean'].values, 2.0, rtol=1e-6)

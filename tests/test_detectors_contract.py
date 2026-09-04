@@ -47,6 +47,17 @@ def _synthetic_dry_stack(n_scenes=4, size=200, band_mean=1.0, band_std=0.02, see
     )
 
 
+def _synthetic_dry_stats(**kwargs):
+    """fit_baseline()'s current interface takes {'mean':.., 'std':..}
+    dicts (see autofloods.preprocessing.compute_dry_baseline_stats),
+    computed here the same way the old stack-then-reduce path did --
+    this contract test isn't about that reduction itself (see
+    tests/test_preprocessing.py::TestComputeDryBaselineStats for that),
+    just about detectors accepting the current interface shape."""
+    stack = _synthetic_dry_stack(**kwargs)
+    return {'mean': stack.mean(axis=0), 'std': stack.std(axis=0)}
+
+
 def _synthetic_wet_scene(size=200, seed=1):
     # Two clearly separated populations per band, in linear power: land
     # matches the dry baseline's own mean (~1.0, so ZScoreDetector's
@@ -80,7 +91,7 @@ def test_fit_baseline_is_callable(detector_cls):
     # for one with requires_baseline_fitting=False -- see
     # test_baseline_skip.py).
     d = detector_cls()
-    dry = _synthetic_dry_stack()
+    dry = _synthetic_dry_stats()
     baseline = d.fit_baseline(dry, dry)
     assert baseline is not None
 
@@ -88,7 +99,7 @@ def test_fit_baseline_is_callable(detector_cls):
 @pytest.mark.parametrize('detector_cls', DETECTOR_FACTORIES)
 def test_detect_returns_valid_encoding(detector_cls):
     d = detector_cls()
-    dry = _synthetic_dry_stack()
+    dry = _synthetic_dry_stats()
     baseline = d.fit_baseline(dry, dry) if d.requires_baseline_fitting else None
     wet_scene = _synthetic_wet_scene()
 

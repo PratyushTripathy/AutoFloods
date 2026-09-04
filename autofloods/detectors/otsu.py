@@ -68,7 +68,7 @@ class OtsuDetector(FloodDetector):
         number for it.
     """
 
-    def fit_baseline(self, vv_stack, vh_stack):
+    def fit_baseline(self, vv_stats, vh_stats):
         """No-op: Otsu needs no dry-season baseline. Per requires_base
         line_fitting=False, the orchestrator never calls this -- it
         exists only to satisfy the FloodDetector interface. Returns an

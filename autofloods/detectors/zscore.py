@@ -29,18 +29,20 @@ class ZScoreDetector(FloodDetector):
         self.vv_thd = vv_thd
         self.vh_thd = vh_thd
 
-    def fit_baseline(self, vv_stack, vh_stack):
+    def fit_baseline(self, vv_stats, vh_stats):
         """
-        Per-pixel dry-season mean and standard deviation for each band,
-        concatenated along a new `band` coordinate
+        Per-pixel dry-season mean and standard deviation for each band
+        (already computed by
+        autofloods.preprocessing.compute_dry_baseline_stats), concatenated
+        along a new `band` coordinate
         ['vv_mean', 'vv_std', 'vh_mean', 'vh_std'].
         """
         return xr.concat(
             [
-                vv_stack.mean(axis=0),
-                vv_stack.std(axis=0),
-                vh_stack.mean(axis=0),
-                vh_stack.std(axis=0),
+                vv_stats['mean'],
+                vv_stats['std'],
+                vh_stats['mean'],
+                vh_stats['std'],
             ],
             dim='band',
         ).assign_coords(band=['vv_mean', 'vv_std', 'vh_mean', 'vh_std'])

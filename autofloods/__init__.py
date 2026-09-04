@@ -581,24 +581,34 @@ class flood_mapper():
     def generate_mean_std_by_aoi(self, reproject_max_workers=None):
         """
         Fit each AOI's dry-season Z-score baseline (self.detector.fit_baseline)
-        from its stacked/clipped dry scenes, write it to NetCDF, and load
-        it into self.mean_std_by_aoi -- alongside any already-processed
-        AOIs reloaded from disk (load_mean_std_by_aoi()). Pixels with
-        stray large sentinel values (>= 50, e.g. from an upstream nodata
-        convention) are masked to NaN before fitting so they don't skew
-        the mean/std.
+        from its dry scenes, write it to NetCDF, and load it into
+        self.mean_std_by_aoi -- alongside any already-processed AOIs
+        reloaded from disk (load_mean_std_by_aoi()).
+
+        Per-pixel dry-season mean/std are computed by
+        preprocessing.compute_dry_baseline_stats() via Welford's online
+        algorithm, one aligned scene at a time -- not by concatenating
+        every dry scene into one in-memory stack first (the old
+        stack_images()-then-.mean()/.std() path, which held the full
+        dry-season stack for a tile in memory at once; see that
+        function's docstring for the previous behavior, still used
+        elsewhere). Stray large sentinel values (>= 50, e.g. from an
+        upstream nodata convention) are masked to NaN per scene before
+        folding into the running stats, same effective behavior as
+        before.
 
         If self.detector.requires_baseline_fitting is False, fit_baseline()
         is never called and no baseline .nc is written; mean_std_by_aoi[id]
-        is set instead to the tile's own reprojected dry-season VV stack,
-        used purely as a CRS/grid reference by prepare_slope(), map_floods(),
+        is set instead to compute_dry_baseline_stats()'s 'grid_ref' (the
+        tile's first aligned dry-season VV scene), used purely as a
+        CRS/grid reference by prepare_slope(), map_floods(),
         merge_floods_by_date(), and generate_number_of_scenes() -- it is NOT
         a statistical baseline and must not be read as one.
 
         reproject_max_workers is passed through to
-        preprocessing.reproject_clip_stac()/stack_images()'s thread pools
-        (CPU-bound reprojection concurrency) -- None (default) uses
-        utils.default_max_workers().
+        preprocessing.reproject_clip_stac()/compute_dry_baseline_stats()'s
+        thread pools (CPU-bound reprojection concurrency) -- None
+        (default) uses utils.default_max_workers().
         """
         # separate and clip the reprojected image for each tile
         reprojected_clipped_dry = {
@@ -609,41 +619,33 @@ class flood_mapper():
             if not id in self.already_processed_aoi_ids
         }
 
-        # stack the reprojected and clipped images
-        self.stacked_dry = {
-            id: preprocessing.stack_images(reprojected_clipped_dry[id], self.grid_shapefile_path, id,
-                                           max_workers=reproject_max_workers, cell_size=self.cell_size)
+        # incrementally fold each tile's dry scenes into running
+        # per-pixel mean/std (Welford's algorithm) instead of stacking
+        # them all in memory first
+        dry_stats = {
+            id: preprocessing.compute_dry_baseline_stats(
+                reprojected_clipped_dry[id], self.grid_shapefile_path, id,
+                max_workers=reproject_max_workers, cell_size=self.cell_size,
+            )
             for id in reprojected_clipped_dry
-            }
-
-        # handle newly introduced nodata values
-        for id in self.stacked_dry:
-            for n in range(len(self.stacked_dry[id]['vv_stack'])):
-                self.stacked_dry[id]['vv_stack'][n] = self.stacked_dry[id]['vv_stack'][n].where(self.stacked_dry[id]['vv_stack'][n] < 50, np.nan)
-                self.stacked_dry[id]['vh_stack'][n] = self.stacked_dry[id]['vh_stack'][n].where(self.stacked_dry[id]['vh_stack'][n] < 50, np.nan)
+        }
 
         # calculate cell level baseline (Z-score: mean and std) for the dry scenes.
         # Skipped for detectors that don't fit a per-tile baseline at all
         # (e.g. a pretrained model that loads weights once, globally).
         if self.detector.requires_baseline_fitting:
             self.mean_std_by_aoi = {
-                id: self.detector.fit_baseline(
-                    self.stacked_dry[id]['vv_stack'], self.stacked_dry[id]['vh_stack']
-                )
-                for id in self.stacked_dry.keys()
+                id: self.detector.fit_baseline(dry_stats[id]['vv'], dry_stats[id]['vh'])
+                for id in dry_stats.keys()
             }
         else:
             # No real baseline is fit -- fit_baseline() is never called --
             # but downstream steps still need a CRS/grid reference for
-            # this tile-year (see this method's docstring). The tile's
-            # own reprojected dry-season VV stack already carries that
-            # grid at zero extra cost (same forced cell_size, same AOI
-            # bounds every dry scene was clipped to), so reuse it as a
-            # marker rather than inventing a second grid-reference path.
+            # this tile-year (see this method's docstring).
             self.mean_std_by_aoi = {
-                id: self.stacked_dry[id]['vv_stack'] for id in self.stacked_dry.keys()
+                id: dry_stats[id]['grid_ref'] for id in dry_stats.keys()
             }
-        self.stacked_dry = None
+        dry_stats = None
 
 
         # save the cell level mean and std to different files (separate for each ID)

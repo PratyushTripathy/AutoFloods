@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.1.0a12
+
+**Fixes an out-of-memory crash a user hit on Google Colab** while fitting
+the dry-season Z-score baseline on a tile with many dry scenes.
+
+- **`generate_mean_std_by_aoi()`'s dry-season baseline fit no longer
+  loads every dry-season scene into memory at once.** The old path
+  (`stack_images()`, `xr.concat`, then `.mean()`/`.std()`) held every
+  aligned scene for a tile simultaneously, then a second full copy in
+  the concatenated stack -- peak memory scaled linearly with the number
+  of dry scenes, and grew without bound as more scenes were added to a
+  tile-year. Replaced with
+  `autofloods.preprocessing.compute_dry_baseline_stats()`, which folds
+  each scene into a running per-pixel mean/variance one at a time via
+  Welford's online algorithm (chosen over a plain running-sum/
+  sum-of-squares for numerical stability -- SAR backscatter's std is a
+  small fraction of its mean, which is exactly where the naive formula's
+  cancellation error is worst), through a bounded sliding-window thread
+  pool so at most `max_workers` scenes are ever resident at once instead
+  of all of them. Verified numerically identical (within floating-point
+  tolerance) to the old stack-then-reduce result. Measured on a synthetic
+  2000x2000px tile: peak memory stayed roughly flat (~370-450 MB) from
+  20 to 120 dry scenes, versus the old path's ~1.0 GB to ~1.8 GB linear
+  growth over the same range.
+  `autofloods.detectors.FloodDetector.fit_baseline()`'s interface
+  changed accordingly (now takes `{'mean', 'std'}` stat dicts rather
+  than a pre-stacked array) -- affects custom `FloodDetector`
+  subclasses, not typical usage via `flood_mapper`.
+
 ## 0.1.0a11
 
 Two usability fixes, both surfaced by real first-time-user testing

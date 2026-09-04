@@ -10,6 +10,8 @@ from sklearn.feature_extraction import image
 from copy import deepcopy
 from ..utils import decibel_to_linear, default_max_workers, zone_to_epsg
 import concurrent.futures
+import gc
+import itertools
 
 
 # define a function to read VV and VH tif files from the cloud and store all images in memory
@@ -164,6 +166,178 @@ def stack_images(clipped_dict, grid_shapefile_path, id, max_workers=None, cell_s
     return {
         'vv_stack': vv_stack,
         'vh_stack': vh_stack
+    }
+
+
+# Stray large sentinel values (e.g. from an upstream nodata convention)
+# masked to NaN before folding into the running baseline stats -- same
+# threshold generate_mean_std_by_aoi() used to apply post-hoc, over the
+# full in-memory stack, before this function existed.
+_NODATA_SENTINEL_THRESHOLD = 50
+
+
+def _welford_init(x):
+    """Zeroed (count, mean, M2) accumulator state shaped like `x`."""
+    zeros = xr.zeros_like(x, dtype=np.float64)
+    return {'count': zeros.copy(), 'mean': zeros.copy(), 'm2': zeros.copy()}
+
+
+def _welford_update(state, x):
+    """
+    One Welford's-algorithm update, folding one new scene `x` into
+    `state` and returning the new state. NaN-aware per pixel (a NaN in
+    `x` leaves that pixel's count/mean/M2 untouched), matching the
+    skipna=True default of xarray's .mean()/.std() -- the old
+    stack-then-reduce behavior this replaces.
+    """
+    mask = x.notnull()
+    count = state['count'] + mask.astype(np.float64)
+    # Divisor for masked-off pixels is never actually used (their delta
+    # is forced to 0 below), so `1.0` here is just a safe placeholder to
+    # avoid a NaN/inf from dividing by the unchanged (possibly still
+    # zero) count.
+    safe_count = count.where(mask, other=1.0)
+    delta = (x - state['mean']).where(mask, other=0.0)
+    mean = state['mean'] + delta / safe_count
+    delta2 = (x - mean).where(mask, other=0.0)
+    m2 = state['m2'] + delta * delta2
+    return {'count': count, 'mean': mean, 'm2': m2}
+
+
+def _welford_finalize(state):
+    """
+    (mean, std) DataArrays from a Welford accumulator state -- population
+    std (ddof=0), matching xr.DataArray.std()'s default, which is what
+    the old stack-then-.std(axis=0) path used. Pixels with zero valid
+    (non-NaN) observations across every scene are NaN in both outputs,
+    matching what an all-NaN slice's nanmean/nanstd would produce.
+    """
+    valid = state['count'] > 0
+    mean = state['mean'].where(valid)
+    variance = (state['m2'] / state['count']).where(valid)
+    std = np.sqrt(variance)
+    return mean, std
+
+
+def compute_dry_baseline_stats(clipped_dict, grid_shapefile_path, id, max_workers=None, cell_size=30):
+    """
+    Per-pixel dry-season mean and standard deviation for VV and VH,
+    computed via Welford's online algorithm one aligned scene at a time,
+    instead of stack_images()'s xr.concat-then-.mean()/.std() over every
+    scene held in memory simultaneously. Only the running (count, mean,
+    M2) accumulators plus whichever scenes are concurrently in flight in
+    the thread pool (bounded by max_workers) are ever resident at once,
+    not the full dry-season stack -- this is what
+    generate_mean_std_by_aoi() now calls instead of stack_images() for
+    the actual baseline fit. stack_images() itself is unchanged and
+    still used elsewhere (e.g. scripts/verification/
+    benchmark_full_pipeline_comparison.py).
+
+    The alignment step (clip_xarray_using_id, onto stack_images()'s same
+    forced common grid -- see its docstring for why) still runs
+    concurrently via a thread pool, since reprojection/read, not the
+    stack+reduce, was the actual memory bottleneck; only the fold into
+    the running accumulators is strictly one-scene-at-a-time.
+
+    Verified to reproduce stack_images()-then-.mean()/.std() exactly
+    (within floating-point tolerance) in
+    tests/test_preprocessing.py::TestComputeDryBaselineStats.
+
+    Returns
+    -------
+    dict with keys:
+        'vv': {'mean': DataArray, 'std': DataArray}
+        'vh': {'mean': DataArray, 'std': DataArray}
+        'grid_ref': DataArray
+            The first aligned VV scene, expanded with a size-1 leading
+            'band' dim to match stack_images()'s (band, y, x) shape --
+            kept only as a coords/CRS/grid reference for detectors that
+            don't fit a real baseline (requires_baseline_fitting=False;
+            see autofloods.generate_mean_std_by_aoi's docstring). Its
+            pixel values are never read as statistics.
+    """
+    if max_workers is None:
+        max_workers = default_max_workers()
+
+    items = list(clipped_dict.values())
+    ref = items[0]['vv_ds']
+
+    def _align_one(item):
+        return {
+            'vv_ds': clip_xarray_using_id(
+                data_xarray=item['vv_ds'],
+                grid_shapefile_path=grid_shapefile_path,
+                aoi_id=id,
+                ref_xarray=ref,
+                cell_size=cell_size,
+            ),
+            'vh_ds': clip_xarray_using_id(
+                data_xarray=item['vh_ds'],
+                grid_shapefile_path=grid_shapefile_path,
+                aoi_id=id,
+                ref_xarray=ref,
+                cell_size=cell_size,
+            )
+        }
+
+    vv_state = None
+    vh_state = None
+    grid_ref = None
+
+    # A bounded sliding window, not executor.map(): map() submits every
+    # task up front, so worker threads can (and in practice do) race
+    # ahead of the main thread's fold loop and finish far more scenes
+    # than have been consumed yet -- each finished-but-unconsumed result
+    # sits fully in memory until read, which silently reproduces the
+    # exact "everything in memory at once" problem this function exists
+    # to avoid. Submitting only one replacement task per consumed result
+    # caps in-flight + completed-but-unconsumed scenes at max_workers,
+    # regardless of how many total scenes there are.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        remaining = iter(items)
+        in_flight = set()
+        for item in itertools.islice(remaining, max_workers):
+            in_flight.add(executor.submit(_align_one, item))
+
+        while in_flight:
+            done, in_flight = concurrent.futures.wait(
+                in_flight, return_when=concurrent.futures.FIRST_COMPLETED
+            )
+            for future in done:
+                aligned = future.result()
+                vv = aligned['vv_ds'].where(aligned['vv_ds'] < _NODATA_SENTINEL_THRESHOLD, np.nan)
+                vh = aligned['vh_ds'].where(aligned['vh_ds'] < _NODATA_SENTINEL_THRESHOLD, np.nan)
+
+                if grid_ref is None:
+                    grid_ref = vv.expand_dims(band=[0])
+
+                vv_state = _welford_init(vv) if vv_state is None else vv_state
+                vh_state = _welford_init(vh) if vh_state is None else vh_state
+                vv_state = _welford_update(vv_state, vv)
+                vh_state = _welford_update(vh_state, vh)
+                del aligned, vv, vh
+                # rioxarray/xarray objects (CRS, index caches) hold
+                # internal reference cycles that plain refcounting can't
+                # free -- without an explicit collect, discarded aligned
+                # scenes pile up as cyclic garbage until Python's gen0
+                # threshold happens to trigger, defeating the bounded
+                # window above (confirmed via a real peak-memory
+                # regression test: gc.collect() found hundreds of
+                # collectable-but-uncollected objects after a 60-scene
+                # run without this call).
+                gc.collect()
+
+                next_item = next(remaining, None)
+                if next_item is not None:
+                    in_flight.add(executor.submit(_align_one, next_item))
+
+    vv_mean, vv_std = _welford_finalize(vv_state)
+    vh_mean, vh_std = _welford_finalize(vh_state)
+
+    return {
+        'vv': {'mean': vv_mean, 'std': vv_std},
+        'vh': {'mean': vh_mean, 'std': vh_std},
+        'grid_ref': grid_ref,
     }
 
 def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray, buffer=None, slope=False, cell_size=30):

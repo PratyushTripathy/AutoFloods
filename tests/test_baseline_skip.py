@@ -12,8 +12,8 @@ the first time any detector with requires_baseline_fitting=False was
 actually run end to end).
 
 Network- and GDAL-reprojection-heavy calls (preprocessing.reproject_
-clip_stac, preprocessing.stack_images) are monkeypatched out with small
-synthetic, CRS-bearing DataArrays -- this test is about
+clip_stac, preprocessing.compute_dry_baseline_stats) are monkeypatched
+out with small synthetic, CRS-bearing DataArrays -- this test is about
 generate_mean_std_by_aoi()'s own control flow, not about real Sentinel-1
 reprojection (see fig_bihar_floods.py's end-to-end OtsuDetector run,
 reported separately, for that).
@@ -33,18 +33,24 @@ GRID_PATH = os.path.join(REPO_ROOT, 'resources', 'india_utm_fishnet_buffer.gpkg'
 TILE_ID = 318
 
 
-def _synthetic_grid_stack(n_scenes=2, size=24, cell_size=30.0):
-    """A CRS-bearing DataArray shaped like a real stack_images() output
-    (dims band/y/x, one 'band' per scene), standing in for a reprojected
-    dry-season VV or VH stack without doing any real reprojection."""
+def _synthetic_grid_array(size=24, cell_size=30.0):
+    """A CRS-bearing DataArray, standing in for a reprojected dry-season
+    VV or VH per-pixel mean/std or grid-reference scene without doing
+    any real reprojection."""
     y = 3_000_000 - np.arange(size) * cell_size
     x = 400_000 + np.arange(size) * cell_size
-    data = np.random.rand(n_scenes, size, size).astype('float32')
-    da = xr.DataArray(
-        data, dims=('band', 'y', 'x'),
-        coords={'band': np.arange(n_scenes), 'y': y, 'x': x},
-    )
+    data = np.random.rand(size, size).astype('float32')
+    da = xr.DataArray(data, dims=('y', 'x'), coords={'y': y, 'x': x})
     return da.rio.write_crs('EPSG:32645')
+
+
+def _synthetic_dry_stats():
+    """Stands in for compute_dry_baseline_stats()'s real return value."""
+    return {
+        'vv': {'mean': _synthetic_grid_array(), 'std': _synthetic_grid_array()},
+        'vh': {'mean': _synthetic_grid_array(), 'std': _synthetic_grid_array()},
+        'grid_ref': _synthetic_grid_array().expand_dims(band=[0]),
+    }
 
 
 def _make_flood_mapper(tmp_path, detector):
@@ -68,17 +74,17 @@ def test_baseline_fitting_is_skipped_and_no_cache_written(tmp_path, monkeypatch)
     fit_baseline_calls = []
 
     class SpyOtsuDetector(OtsuDetector):
-        def fit_baseline(self, vv_stack, vh_stack):
+        def fit_baseline(self, vv_stats, vh_stats):
             fit_baseline_calls.append(1)
-            return super().fit_baseline(vv_stack, vh_stack)
+            return super().fit_baseline(vv_stats, vh_stats)
 
     detector = SpyOtsuDetector()
     fm = _make_flood_mapper(tmp_path, detector)
 
     monkeypatch.setattr(autofloods.preprocessing, 'reproject_clip_stac', lambda *a, **k: {})
     monkeypatch.setattr(
-        autofloods.preprocessing, 'stack_images',
-        lambda *a, **k: {'vv_stack': _synthetic_grid_stack(), 'vh_stack': _synthetic_grid_stack()},
+        autofloods.preprocessing, 'compute_dry_baseline_stats',
+        lambda *a, **k: _synthetic_dry_stats(),
     )
 
     fm.generate_mean_std_by_aoi()
@@ -109,17 +115,17 @@ def test_baseline_fitting_still_runs_for_zscore(tmp_path, monkeypatch):
     fit_baseline_calls = []
 
     class SpyZScoreDetector(ZScoreDetector):
-        def fit_baseline(self, vv_stack, vh_stack):
+        def fit_baseline(self, vv_stats, vh_stats):
             fit_baseline_calls.append(1)
-            return super().fit_baseline(vv_stack, vh_stack)
+            return super().fit_baseline(vv_stats, vh_stats)
 
     detector = SpyZScoreDetector()
     fm = _make_flood_mapper(tmp_path, detector)
 
     monkeypatch.setattr(autofloods.preprocessing, 'reproject_clip_stac', lambda *a, **k: {})
     monkeypatch.setattr(
-        autofloods.preprocessing, 'stack_images',
-        lambda *a, **k: {'vv_stack': _synthetic_grid_stack(), 'vh_stack': _synthetic_grid_stack()},
+        autofloods.preprocessing, 'compute_dry_baseline_stats',
+        lambda *a, **k: _synthetic_dry_stats(),
     )
 
     fm.generate_mean_std_by_aoi()

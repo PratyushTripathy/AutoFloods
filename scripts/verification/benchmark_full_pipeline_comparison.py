@@ -196,8 +196,15 @@ def run_variant(name, threaded):
         for n in range(len(stacked_dry[id]['vv_stack'])):
             stacked_dry[id]['vv_stack'][n] = stacked_dry[id]['vv_stack'][n].where(stacked_dry[id]['vv_stack'][n] < 50, np.nan)
             stacked_dry[id]['vh_stack'][n] = stacked_dry[id]['vh_stack'][n].where(stacked_dry[id]['vh_stack'][n] < 50, np.nan)
+    # fit_baseline()'s interface now takes {'mean':.., 'std':..} dicts
+    # (see autofloods.preprocessing.compute_dry_baseline_stats) rather
+    # than a raw stack -- this script's own stack_fn variants are the
+    # thing under comparison, so reduce here rather than changing them.
     fm.mean_std_by_aoi = {
-        id: fm.detector.fit_baseline(stacked_dry[id]['vv_stack'], stacked_dry[id]['vh_stack'])
+        id: fm.detector.fit_baseline(
+            {'mean': stacked_dry[id]['vv_stack'].mean(axis=0), 'std': stacked_dry[id]['vv_stack'].std(axis=0)},
+            {'mean': stacked_dry[id]['vh_stack'].mean(axis=0), 'std': stacked_dry[id]['vh_stack'].std(axis=0)},
+        )
         for id in stacked_dry
     }
     t_dry = time.time() - t0
