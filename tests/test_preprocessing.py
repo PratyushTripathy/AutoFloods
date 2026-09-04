@@ -50,7 +50,21 @@ def _make_grid_file(tmp_path, zone='45R', bounds=(85.0, 25.0, 85.5, 25.5), filen
 def _make_source_dataarray(bounds=(84.9, 24.9, 85.6, 25.6), size=40, fill=None):
     """A synthetic EPSG:4326 DataArray, comfortably covering `bounds`
     (bigger than the grid tile from _make_grid_file), for reprojection
-    into the tile's UTM zone."""
+    into the tile's UTM zone.
+
+    Carries a real, incidental leading 'band' dim of size 1, matching
+    what rioxarray.open_rasterio(masked=True) actually returns for a
+    single-band GeoTIFF/VRT (the shape autofloods.utils.
+    open_rasterio_with_retry() -- used by both OPERASource and
+    MPCSource -- produces in production). An earlier version of this
+    fixture used a (y, x)-only array, which every test built on it
+    passed against despite a real 'Dimension band already exists' crash
+    in compute_dry_baseline_stats() on real data (grid_ref's
+    expand_dims(band=[0]) assumed no 'band' dim existed yet) -- 139
+    tests green, real bug shipped. `fill`, if given, is still a plain
+    (size, size) 2D array; the leading band dim is added here so every
+    call site doesn't need updating.
+    """
     x_min, y_min, x_max, y_max = bounds
     xs = np.linspace(x_min, x_max, size)
     ys = np.linspace(y_max, y_min, size)  # descending, north -> south
@@ -58,7 +72,10 @@ def _make_source_dataarray(bounds=(84.9, 24.9, 85.6, 25.6), size=40, fill=None):
         data = np.ones((size, size), dtype='float64')
     else:
         data = fill
-    da = xr.DataArray(data, dims=('y', 'x'), coords={'y': ys, 'x': xs})
+    da = xr.DataArray(
+        data[np.newaxis, :, :], dims=('band', 'y', 'x'),
+        coords={'band': [1], 'y': ys, 'x': xs},
+    )
     da.rio.write_crs('EPSG:4326', inplace=True)
     return da
 
@@ -395,6 +412,18 @@ class TestComputeDryBaselineStats:
         result = preprocessing.compute_dry_baseline_stats(
             clipped_dict, grid_path, 'tile1', max_workers=1, cell_size=100,
         )
+
+        # Explicit shape checks, not just assert_allclose: a (1, y, x)
+        # vs. (y, x) mismatch broadcasts silently in assert_allclose and
+        # would have hidden the real "Dimension band already exists"
+        # regression (grid_ref's expand_dims assumed the incidental
+        # 'band' dim clip_xarray_using_id() passes through was already
+        # squeezed off mean/std) -- confirm the dims explicitly so a
+        # shape regression here fails loudly, not silently.
+        assert result['vv']['mean'].dims == ('y', 'x')
+        assert result['vv']['std'].dims == ('y', 'x')
+        assert result['vh']['mean'].dims == ('y', 'x')
+        assert result['vh']['std'].dims == ('y', 'x')
 
         np.testing.assert_allclose(result['vv']['mean'].values, expected_vv_mean.values, rtol=1e-8, atol=1e-10)
         np.testing.assert_allclose(result['vv']['std'].values, expected_vv_std.values, rtol=1e-8, atol=1e-10)

@@ -34,22 +34,40 @@ TILE_ID = 318
 
 
 def _synthetic_grid_array(size=24, cell_size=30.0):
-    """A CRS-bearing DataArray, standing in for a reprojected dry-season
-    VV or VH per-pixel mean/std or grid-reference scene without doing
-    any real reprojection."""
+    """A CRS-bearing DataArray with a real, incidental leading 'band'
+    dim of size 1 -- matching what rioxarray.open_rasterio(masked=True)
+    actually returns for a single-band raster (see
+    tests/test_preprocessing.py::_make_source_dataarray for the same
+    fix and why it matters: a (y, x)-only fixture here previously let a
+    real 'Dimension band already exists' crash in
+    compute_dry_baseline_stats() go undetected, since generate_mean_std_
+    by_aoi()'s own control flow -- what this file actually tests -- is
+    shape-agnostic and never exercises compute_dry_baseline_stats()'s
+    real squeeze/expand_dims logic (it's monkeypatched out below).
+    Standing in for one aligned dry-season VV or VH scene, before
+    compute_dry_baseline_stats() squeezes that incidental band dim off."""
     y = 3_000_000 - np.arange(size) * cell_size
     x = 400_000 + np.arange(size) * cell_size
-    data = np.random.rand(size, size).astype('float32')
-    da = xr.DataArray(data, dims=('y', 'x'), coords={'y': y, 'x': x})
+    data = np.random.rand(1, size, size).astype('float32')
+    da = xr.DataArray(data, dims=('band', 'y', 'x'), coords={'band': [1], 'y': y, 'x': x})
     return da.rio.write_crs('EPSG:32645')
 
 
 def _synthetic_dry_stats():
-    """Stands in for compute_dry_baseline_stats()'s real return value."""
+    """Stands in for compute_dry_baseline_stats()'s real return value,
+    built the same way the real function builds it from an aligned
+    scene: mean/std are the incidental 'band' dim squeezed off (y, x
+    only); grid_ref keeps its (band=1, y, x) shape."""
     return {
-        'vv': {'mean': _synthetic_grid_array(), 'std': _synthetic_grid_array()},
-        'vh': {'mean': _synthetic_grid_array(), 'std': _synthetic_grid_array()},
-        'grid_ref': _synthetic_grid_array().expand_dims(band=[0]),
+        'vv': {
+            'mean': _synthetic_grid_array().squeeze('band', drop=True),
+            'std': _synthetic_grid_array().squeeze('band', drop=True),
+        },
+        'vh': {
+            'mean': _synthetic_grid_array().squeeze('band', drop=True),
+            'std': _synthetic_grid_array().squeeze('band', drop=True),
+        },
+        'grid_ref': _synthetic_grid_array(),
     }
 
 

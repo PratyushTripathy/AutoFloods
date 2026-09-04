@@ -249,12 +249,13 @@ def compute_dry_baseline_stats(clipped_dict, grid_shapefile_path, id, max_worker
         'vv': {'mean': DataArray, 'std': DataArray}
         'vh': {'mean': DataArray, 'std': DataArray}
         'grid_ref': DataArray
-            The first aligned VV scene, expanded with a size-1 leading
-            'band' dim to match stack_images()'s (band, y, x) shape --
-            kept only as a coords/CRS/grid reference for detectors that
-            don't fit a real baseline (requires_baseline_fitting=False;
-            see autofloods.generate_mean_std_by_aoi's docstring). Its
-            pixel values are never read as statistics.
+            The first aligned VV scene (after its raster-artifact 'band'
+            dim is squeezed off, see above) with a size-1 leading 'band'
+            dim added back, to match stack_images()'s (band, y, x) shape
+            -- kept only as a coords/CRS/grid reference for detectors
+            that don't fit a real baseline (requires_baseline_fitting=
+            False; see autofloods.generate_mean_std_by_aoi's docstring).
+            Its pixel values are never read as statistics.
     """
     if max_workers is None:
         max_workers = default_max_workers()
@@ -307,6 +308,25 @@ def compute_dry_baseline_stats(clipped_dict, grid_shapefile_path, id, max_worker
                 aligned = future.result()
                 vv = aligned['vv_ds'].where(aligned['vv_ds'] < _NODATA_SENTINEL_THRESHOLD, np.nan)
                 vh = aligned['vh_ds'].where(aligned['vh_ds'] < _NODATA_SENTINEL_THRESHOLD, np.nan)
+
+                # Every scene read via utils.open_rasterio_with_retry()
+                # (both OPERASource and MPCSource) carries a real, incidental
+                # 'band' dim of size 1 -- an artifact of opening a
+                # single-band GeoTIFF/VRT via rioxarray, not a "which scene"
+                # axis -- and clip_xarray_using_id()'s .interp() regrid
+                # passes it through unchanged. Squeeze it off here so the
+                # Welford accumulators end up as plain (y, x), matching the
+                # old vv_stack.mean(axis=0)/.std(axis=0) contract exactly
+                # (verified in tests/test_preprocessing.py::
+                # TestComputeDryBaselineStats). Without this, grid_ref's
+                # expand_dims(band=[0]) below raises "Dimension band
+                # already exists" -- caught on a real Colab run, since
+                # every synthetic test fixture used a (y, x)-only array
+                # that never had this dim to begin with.
+                if 'band' in vv.dims:
+                    vv = vv.squeeze('band', drop=True)
+                if 'band' in vh.dims:
+                    vh = vh.squeeze('band', drop=True)
 
                 if grid_ref is None:
                     grid_ref = vv.expand_dims(band=[0])

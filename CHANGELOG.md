@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.1.0a13
+
+**Fixes a regression introduced in 0.1.0a12** (the Welford's-algorithm
+dry-season baseline rewrite) -- **upgrade immediately if you're on
+0.1.0a12**, which crashes on the very first dry scene of any tile,
+every time, for both `OPERASource` and `MPCSource`.
+
+- **`generate_mean_std_by_aoi()` raised `ValueError: Dimension band
+  already exists`**, from `compute_dry_baseline_stats()`. Root cause:
+  every real VV/VH scene (opened via `open_rasterio_with_retry()`, used
+  identically by both sources) carries a real, incidental leading
+  `'band'` dimension of size 1 -- an artifact of reading a single-band
+  GeoTIFF/VRT via rioxarray, not a "which scene" axis -- and this
+  survives reprojection/regridding unchanged. 0.1.0a12's `grid_ref`
+  construction called `.expand_dims(band=[0])`, which assumes no
+  `'band'` dim exists yet; on real data, it already does. Every
+  synthetic test fixture exercising this path used a `(y, x)`-only
+  array that never had this dimension, so 0.1.0a12 shipped with all 139
+  tests green despite the bug -- caught only once real Sentinel-1 data
+  hit the new code path on Colab.
+- Fixed by squeezing that incidental `'band'` dim off each scene
+  immediately after alignment, before folding it into the Welford
+  accumulators -- restoring the exact `(y, x)` shape the pre-0.1.0a12
+  stack-then-reduce path always produced.
+- **Closed the actual testing gap, not just the one bug**: the
+  synthetic fixtures feeding this code path now carry a real `band=1`
+  dimension, matching what `rioxarray.open_rasterio()` actually
+  returns, instead of a simplified `(y, x)`-only shape. Confirmed these
+  corrected fixtures do reproduce the exact original crash if the fix
+  is reverted, before re-verifying the fix against them. Full test
+  suite (139 tests) passing with real shapes exercised throughout.
+
 ## 0.1.0a12
 
 **Fixes an out-of-memory crash a user hit on Google Colab** while fitting
