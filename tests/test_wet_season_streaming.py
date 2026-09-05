@@ -24,6 +24,7 @@ import os
 
 import numpy as np
 import pytest
+import rasterio
 import xarray as xr
 
 import autofloods
@@ -209,7 +210,11 @@ class TestStreamingMatchesOldInMemoryComputation:
         assert combined_0715[0, 0] == 2  # VV-only flood
         assert combined_0715[1, 1] == 1  # VH-only flood
 
-    def test_gap_count_matches(self, tmp_path, monkeypatch):
+    def test_valid_count_matches(self, tmp_path, monkeypatch):
+        # generate_number_of_scenes() must return a per-pixel VALID
+        # (non-NaN) observation count -- see the 0.1.0a21 fix -- not the
+        # inverted gap count it used to return (both before and after
+        # the streaming rewrite; see CHANGELOG.md).
         fm = _make_flood_mapper(tmp_path)
         fm.mean_std_by_aoi = {TILE_ID: _make_baseline()}
         _wire_wet_scene_mocks(fm, monkeypatch)
@@ -217,19 +222,29 @@ class TestStreamingMatchesOldInMemoryComputation:
         fm.prepare_wet_scenes()
         fm.generate_number_of_scenes(export_raster=False)
 
-        # old-style reference: stack every scene's (already nodata-masked)
-        # array and sum NaN-any-band, exactly as generate_number_of_scenes()
-        # used to compute it directly.
-        old_gap_count = np.stack([
-            np.any(np.isnan(_old_style_wet_scene(scene_id).values), axis=0)
+        # old-style reference, but inverted to VALID (not gap): stack
+        # every scene's (already nodata-masked) array and sum "not any
+        # NaN band", i.e. what a pre-streaming stack-then-reduce
+        # implementation would give if it had computed the right thing.
+        old_valid_count = np.stack([
+            ~np.any(np.isnan(_old_style_wet_scene(scene_id).values), axis=0)
             for scene_id in SCENE_DEFS
         ]).sum(axis=0)
+        old_gap_count = len(SCENE_DEFS) - old_valid_count
 
-        np.testing.assert_array_equal(fm.scene_count[TILE_ID].values, old_gap_count)
+        np.testing.assert_array_equal(fm.scene_count[TILE_ID].values, old_valid_count)
         # sanity: exactly one scene (20240716) had a sentinel-masked gap,
-        # at pixel (0, 1)
-        assert old_gap_count[0, 1] == 1
-        assert old_gap_count.sum() == 1
+        # at pixel (0, 1) -- valid count there is 3 of 4 scenes, full
+        # 4-of-4 everywhere else.
+        assert old_valid_count[0, 1] == 3
+        assert old_valid_count.sum() == len(SCENE_DEFS) * 9 - 1
+
+        # correctness invariant: valid count + gap count == total scenes
+        # processed, at every pixel, for this known-gap synthetic case.
+        np.testing.assert_array_equal(
+            fm.scene_count[TILE_ID].values + old_gap_count,
+            np.full_like(old_valid_count, len(SCENE_DEFS)),
+        )
 
 
 class TestMapFloodsRerunWithoutRetriggeringPrepareWetScenes:
@@ -266,6 +281,54 @@ class TestMapFloodsRerunWithoutRetriggeringPrepareWetScenes:
         vv_only_scene = 'S1A_IW_GRDH_1SDV_20240715T000000_20240715T000025_000001_000001_rtc'
         assert lenient_result[vv_only_scene][0, 0] == 2  # -2.5 threshold: flagged VV-only
         assert strict_result[vv_only_scene][0, 0] == 0   # -10 threshold: no longer flagged
+
+
+class TestValidCountNormalizesMonthlySum:
+    """The actual intended use case for generate_number_of_scenes()'s
+    valid-observation count (0.1.0a21): normalizing monthly_sum()'s
+    per-month flood-day count into a "fraction of valid observations
+    flooded" per pixel -- this is what a gap count could never support
+    (it's the wrong quantity for a denominator)."""
+
+    def test_fraction_flooded_is_computable_and_correct(self, tmp_path, monkeypatch):
+        fm = _make_flood_mapper(tmp_path)
+        fm.mean_std_by_aoi = {TILE_ID: _make_baseline()}
+        _wire_wet_scene_mocks(fm, monkeypatch)
+        _write_dummy_slope(fm)
+
+        fm.prepare_wet_scenes()
+        fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, export_vector=False, export_maps=False)
+        fm.merge_floods_by_date(export_raster=True)
+        fm.generate_number_of_scenes(export_raster=False)
+        fm.monthly_sum()
+
+        monthly_path = fm.expected_monthly_outfile(TILE_ID)
+        with rasterio.open(monthly_path) as src:
+            monthly_count = src.read(1).astype(float)
+
+        valid_count = fm.scene_count[TILE_ID].values.astype(float)
+        fraction_flooded = monthly_count / valid_count
+
+        # pixel (1, 0): high-confidence flood on exactly one of the 3
+        # observed dates (20240717), valid (no gap) in all 4 raw scenes.
+        assert monthly_count[1, 0] == 1
+        assert valid_count[1, 0] == 4
+        assert fraction_flooded[1, 0] == pytest.approx(0.25)
+
+        # pixel (0, 1): the sentinel-nodata-gap pixel -- never flooded,
+        # valid in only 3 of 4 scenes (one scene, 20240716, had a gap
+        # here) -- fraction is 0, not NaN/undefined, and the denominator
+        # correctly reflects the gap.
+        assert monthly_count[0, 1] == 0
+        assert valid_count[0, 1] == 3
+        assert fraction_flooded[0, 1] == 0.0
+
+        # a pixel with zero valid observations would be undefined (0/0)
+        # -- not exercised by this synthetic case (every pixel has at
+        # least 3 of 4 valid scenes), but worth noting: monthly_sum()
+        # itself already handles this case explicitly by writing nodata
+        # (255) rather than a misleading 0 -- see aggregate_monthly()'s
+        # docstring.
 
 
 class TestMapFloodsExportMapsAndVector:

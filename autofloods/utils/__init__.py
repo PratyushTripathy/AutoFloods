@@ -13,6 +13,7 @@ import rioxarray
 from rioxarray import merge as rioxarray_merge
 import numpy as np
 import xarray as xr
+from tqdm.auto import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -499,7 +500,10 @@ def download_nasadem(bbox, source, overview_level=1, nodata=0.0, max_workers=6):
         )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        dem_xarray_list = list(executor.map(_read_one, dem_item_list))
+        dem_xarray_list = list(tqdm(
+            executor.map(_read_one, dem_item_list), total=len(dem_item_list),
+            desc='Downloading DEM tiles', disable=None,
+        ))
 
     mosaic_xarray = rioxarray_merge.merge_arrays(dem_xarray_list, nodata=nodata)
 

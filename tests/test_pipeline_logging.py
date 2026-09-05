@@ -242,12 +242,12 @@ class TestGenerateNumberOfScenes:
         fm = _make_flood_mapper(tmp_path)
         fm.mean_std_by_aoi = {TILE_ID: _synthetic_grid_array(size=3).squeeze('band', drop=True).expand_dims(band=[0])}
         fm.wet_scene_paths = {TILE_ID: {'scene_a': 'dummy_path.nc'}}
-        fm._wet_scene_gap_count_by_aoi = {TILE_ID: np.array([[0, 1, 0], [0, 0, 0], [0, 0, 0]])}
+        fm._wet_scene_valid_count_by_aoi = {TILE_ID: np.array([[1, 0, 1], [1, 1, 1], [1, 1, 1]])}
 
         with caplog.at_level(logging.INFO, logger='autofloods'):
             fm.generate_number_of_scenes(export_raster=False)
 
-        assert 'Scene-count raster computed for 1 AOI(s)' in caplog.text
+        assert 'Valid-observation-count raster computed for 1 AOI(s)' in caplog.text
 
 
 class TestMonthlySum:

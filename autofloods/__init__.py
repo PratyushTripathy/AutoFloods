@@ -25,6 +25,7 @@ import xarray as xr
 import numpy as np
 import rasterio
 from rasterio.enums import Resampling
+from tqdm.auto import tqdm
 
 __version__ = _pkg_version("autofloods")
 
@@ -658,7 +659,10 @@ class flood_mapper():
                 )
                 for item in s1_scenes
             ]
-            for future in concurrent.futures.as_completed(futures):
+            for future in tqdm(
+                concurrent.futures.as_completed(futures), total=len(futures),
+                desc=f'Reading {dry_wet}-season scenes', disable=None,
+            ):
                 stac_id, stac_ds = future.result()
                 s1_combined[stac_id] = stac_ds
 
@@ -702,12 +706,12 @@ class flood_mapper():
         (default) uses utils.default_max_workers().
         """
         # separate and clip the reprojected image for each tile
+        ids_to_fit = [id for id in self.selected_grid_id if not id in self.already_processed_aoi_ids]
         reprojected_clipped_dry = {
             id: preprocessing.reproject_clip_stac(self.s1_dry_dict, self.dry_aoi_scene_dict,
                                                   self.grid_shapefile_path, id,
                                                   max_workers=reproject_max_workers)
-            for id in self.selected_grid_id
-            if not id in self.already_processed_aoi_ids
+            for id in tqdm(ids_to_fit, desc='Reprojecting dry-season scenes', disable=None)
         }
 
         # incrementally fold each tile's dry scenes into running
@@ -718,7 +722,7 @@ class flood_mapper():
                 reprojected_clipped_dry[id], self.grid_shapefile_path, id,
                 max_workers=reproject_max_workers, cell_size=self.cell_size,
             )
-            for id in reprojected_clipped_dry
+            for id in tqdm(reprojected_clipped_dry, desc='Fitting dry-season baseline', disable=None)
         }
 
         # calculate cell level baseline (Z-score: mean and std) for the dry scenes.
@@ -844,7 +848,7 @@ class flood_mapper():
             # for each ID, clip using the buffered GDF, calculate relative slope
             # and then clip to the actual tile extent
             self.slope = dict()
-            for id in slope_id_to_process:
+            for id in tqdm(slope_id_to_process, desc='Computing slope', disable=None):
                 print(f'Slope for tile ID {id} not found. Downloading DEM...')
                 self.slope[id] = autofloods.preprocessing.compute_slope(
                     dem_xarray=dem_merged_xarray,
@@ -857,7 +861,7 @@ class flood_mapper():
                 )
 
             # for each of the ids, clip slope and export to the .nc file
-            for id in slope_id_to_process:
+            for id in tqdm(slope_id_to_process, desc='Clipping and exporting slope', disable=None):
                 self.slope[id] = autofloods.preprocessing.clip_xarray_using_id(
                     data_xarray=self.slope[id],
                     grid_shapefile_path=self.grid_shapefile_path,
@@ -922,11 +926,11 @@ class flood_mapper():
         an in-memory dict, and can be called (and re-called, with
         different thresholds) any number of times afterward without
         re-triggering any of this. Also sets a private
-        self._wet_scene_gap_count_by_aoi: {aoi_id: 2D numpy int array},
-        a per-pixel count of scenes with a NaN/gap observation, folded
-        in one scene at a time as each is processed -- generate_number_
-        of_scenes() reads this directly instead of re-deriving it from
-        the (no-longer-fully-resident) wet scenes.
+        self._wet_scene_valid_count_by_aoi: {aoi_id: 2D numpy int array},
+        a per-pixel count of scenes with a VALID (non-NaN) observation,
+        folded in one scene at a time as each is processed --
+        generate_number_of_scenes() reads this directly instead of
+        re-deriving it from the (no-longer-fully-resident) wet scenes.
 
         max_workers controls read_scenes()'s download concurrency
         (network-bound); reproject_max_workers bounds the sliding
@@ -971,11 +975,17 @@ class flood_mapper():
                 scene = scene.where(scene < 50, np.nan)
                 scene.to_netcdf(cache_path)
 
-            gap_mask = np.any(np.isnan(scene.values), axis=0)
-            return aoi_id, scene_id, cache_path, gap_mask
+            # a pixel is a VALID observation for this scene only if
+            # neither band is NaN there -- one NaN band (nodata/gap) is
+            # enough to disqualify the whole pixel for this scene, same
+            # all-or-nothing logic the old gap_mask used, just inverted
+            # to count what generate_number_of_scenes() actually needs:
+            # usable observations, not gaps.
+            valid_mask = ~np.any(np.isnan(scene.values), axis=0)
+            return aoi_id, scene_id, cache_path, valid_mask
 
         self.wet_scene_paths = {}
-        self._wet_scene_gap_count_by_aoi = {}
+        self._wet_scene_valid_count_by_aoi = {}
 
         pending = [
             (aoi_id, scene_id)
@@ -984,7 +994,8 @@ class flood_mapper():
         ]
         remaining = iter(pending)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=reproject_max_workers) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=reproject_max_workers) as executor, \
+                tqdm(total=len(pending), desc='Preparing wet-season scenes', disable=None) as pbar:
             in_flight = set()
             for aoi_id, scene_id in itertools.islice(remaining, reproject_max_workers):
                 in_flight.add(executor.submit(_process_one_scene, aoi_id, scene_id))
@@ -994,13 +1005,14 @@ class flood_mapper():
                     in_flight, return_when=concurrent.futures.FIRST_COMPLETED
                 )
                 for future in done:
-                    aoi_id, scene_id, cache_path, gap_mask = future.result()
+                    aoi_id, scene_id, cache_path, valid_mask = future.result()
 
                     self.wet_scene_paths.setdefault(aoi_id, {})[scene_id] = cache_path
 
-                    if aoi_id not in self._wet_scene_gap_count_by_aoi:
-                        self._wet_scene_gap_count_by_aoi[aoi_id] = np.zeros(gap_mask.shape, dtype=int)
-                    self._wet_scene_gap_count_by_aoi[aoi_id] += gap_mask.astype(int)
+                    if aoi_id not in self._wet_scene_valid_count_by_aoi:
+                        self._wet_scene_valid_count_by_aoi[aoi_id] = np.zeros(valid_mask.shape, dtype=int)
+                    self._wet_scene_valid_count_by_aoi[aoi_id] += valid_mask.astype(int)
+                    pbar.update(1)
 
                     next_item = next(remaining, None)
                     if next_item is not None:
@@ -1117,7 +1129,10 @@ class flood_mapper():
                 )
 
             scene_out = {}
-            for scene_id, wet_scene_path in self.wet_scene_paths[id].items():
+            for scene_id, wet_scene_path in tqdm(
+                self.wet_scene_paths[id].items(), total=len(self.wet_scene_paths[id]),
+                desc=f'Classifying scenes for AOI {id}', disable=None,
+            ):
                 wet_scene = xr.load_dataarray(wet_scene_path)
                 classified = self.detector.detect(self.mean_std_by_aoi[id], wet_scene)
                 del wet_scene
@@ -1263,7 +1278,7 @@ class flood_mapper():
         """
         self.flood_by_date = dict()
 
-        for id in self.flood_dict:
+        for id in tqdm(self.flood_dict, desc='Merging floods by date', disable=None):
             if len(self.flood_dict[id]) > 0: # process only if there is a wet scene (throws error otherwise)
                 dates_list, floods_stacked = autofloods.utils.flood_data_3dstack_from_paths(self.flood_dict[id])
                 self.flood_by_date[id] = xr.DataArray(
@@ -1291,7 +1306,7 @@ class flood_mapper():
                 os.makedirs(folder_to_create, exist_ok=True)
 
             self.flood_raster_dict = dict()
-            for id in self.flood_by_date:
+            for id in tqdm(self.flood_by_date, desc='Exporting merged-by-date rasters', disable=None):
                 outfile_flood = os.path.join(
                     folder_to_create,
                     os.path.split(flood_raster_stacked_outfile)[-1].replace('_id.tif', f'{yearmonthtag}_{id}.tif')
@@ -1305,27 +1320,38 @@ class flood_mapper():
     def generate_number_of_scenes(self, export_raster=False):
         """
         Per-pixel count, across all of an AOI's wet-season scenes, of how
-        many scenes had a NaN (missing/invalid) observation at that pixel
-        -- i.e. a per-pixel data-GAP count, not a count of usable/valid
-        observations despite the method/output-file name ("scenes count").
-        Worth double-checking against intent before relying on this for
-        anything beyond a rough QA signal for coverage gaps. Writes
-        'floodscenescount_<DRY_..._WET_...>_<id>.tif' if export_raster.
+        many scenes had a VALID (non-NaN) observation at that pixel --
+        the denominator needed to normalize monthly_sum()'s per-month
+        flood-day count (e.g. "flooded on 3 of N valid dates" requires
+        knowing N per pixel). Writes
+        'floodvalidscenecount_<DRY_..._WET_...>_<id>.tif' if export_raster.
 
-        Reads self._wet_scene_gap_count_by_aoi -- a per-pixel running
+        Fixed 2026-09-05 (0.1.0a21): this previously computed the
+        opposite -- a per-pixel GAP count (scenes with a missing/NaN
+        observation), inverted from what the method name and its use as
+        monthly_sum()'s normalizer actually require. A longstanding bug,
+        not something the wet-season streaming rewrite (0.1.0a19)
+        introduced -- the pre-streaming stack-then-reduce implementation
+        computed the identical gap count from the same
+        np.any(np.isnan(...), axis=0) logic, just materializing the full
+        stack first instead of accumulating it. See CHANGELOG.md for the
+        full writeup.
+
+        Reads self._wet_scene_valid_count_by_aoi -- a per-pixel running
         count folded in one scene at a time by prepare_wet_scenes(), as
         each wet scene was processed -- rather than re-deriving this
         from a full in-memory dict of every wet scene's array (which no
         longer exists; see prepare_wet_scenes()'s docstring). Same
-        result as the old stack-then-sum, just accumulated instead of
-        materialized: sum is associative regardless of processing order.
+        result as a stack-then-sum would give, just accumulated instead
+        of materialized: sum is associative regardless of processing
+        order.
         """
         self.scene_count = dict()
 
-        for id in self._wet_scene_gap_count_by_aoi:
+        for id in tqdm(self._wet_scene_valid_count_by_aoi, desc='Computing valid-observation-count raster', disable=None):
             if id in self.wet_scene_paths and len(self.wet_scene_paths[id]) > 0: # process only if there is a wet scene (throws error otherwise)
                 self.scene_count[id] = xr.DataArray(
-                    self._wet_scene_gap_count_by_aoi[id],
+                    self._wet_scene_valid_count_by_aoi[id],
                     dims=self.mean_std_by_aoi[id].dims[1:],
                     coords={
                         'y':self.mean_std_by_aoi[id].coords['y'],
@@ -1333,7 +1359,7 @@ class flood_mapper():
                     }
                 )
 
-        logger.info(f'Scene-count raster computed for {len(self.scene_count)} AOI(s)')
+        logger.info(f'Valid-observation-count raster computed for {len(self.scene_count)} AOI(s)')
 
         # export if the export parameter is true
         dry_year_begin = min(self.dry_years)
@@ -1342,13 +1368,13 @@ class flood_mapper():
         wet_yearmonth_end = self.wet_yearmonths[-1]
 
         if export_raster:
-            flood_scenes_count_outfile = os.path.join(self.output_base, 'flood_raster', 'floodscenescount_id.tif')
+            flood_scenes_count_outfile = os.path.join(self.output_base, 'flood_raster', 'floodvalidscenecount_id.tif')
             yearmonthtag = f'DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}'
-            folder_to_create = os.path.split(flood_scenes_count_outfile)[0].replace('/flood_raster', f'/flood_raster/floodscenescount_{yearmonthtag}/')
+            folder_to_create = os.path.split(flood_scenes_count_outfile)[0].replace('/flood_raster', f'/flood_raster/floodvalidscenecount_{yearmonthtag}/')
             if not os.path.exists(folder_to_create):
                 os.makedirs(folder_to_create, exist_ok=True)
 
-            for id in self.scene_count:
+            for id in tqdm(self.scene_count, desc='Exporting valid-observation-count rasters', disable=None):
                 outfile_flood = os.path.join(
                     folder_to_create,
                     os.path.split(flood_scenes_count_outfile)[-1].replace('_id.tif', f'{yearmonthtag}_{id}.tif')
@@ -1389,7 +1415,7 @@ class flood_mapper():
         raster via postprocessing.aggregate_monthly() -- the final output
         expected_monthly_outfile()/is_fully_processed() check for.
         """
-        for id in self.flood_raster_dict:
+        for id in tqdm(self.flood_raster_dict, desc='Aggregating monthly sums', disable=None):
             autofloods.postprocessing.aggregate_monthly(self.flood_raster_dict[id])
 
         logger.info(f'Monthly aggregation complete for {len(self.flood_raster_dict)} AOI(s)')

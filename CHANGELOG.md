@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.1.0a21
+
+Two independent changes in this release: a correctness fix and a UX
+addition. Documented separately since one is a bug fix, not cosmetic.
+
+**Bug fix: `generate_number_of_scenes()` was computing the opposite of
+what it's documented and needed for.** It's meant to return, per pixel,
+how many wet-season scenes had a VALID (non-NaN) observation there --
+the denominator needed to normalize `monthly_sum()`'s per-month
+flood-day count into a fraction (e.g. "flooded on 3 of N valid dates"
+requires knowing N per pixel). It was actually returning a per-pixel
+GAP count (scenes with a missing/NaN observation) -- exactly inverted.
+
+- **This is a longstanding bug, not a regression from the 0.1.0a19
+  wet-season streaming rewrite.** Checked the pre-streaming
+  stack-then-reduce implementation (present since at least `d906374`,
+  and likely from this method's original implementation): it computed
+  the identical `np.any(np.isnan(...), axis=0)` gap count from a fully
+  materialized stack. The streaming rewrite faithfully reproduced the
+  same (already wrong) computation, just accumulated instead of
+  materialized -- it did not introduce this bug.
+- Fixed at the source: `prepare_wet_scenes()`'s streaming accumulator
+  (renamed `self._wet_scene_gap_count_by_aoi` ->
+  `self._wet_scene_valid_count_by_aoi`) now folds in `~np.any(np.isnan(...))`
+  (valid) instead of `np.any(np.isnan(...))` (gap), one scene at a
+  time, same as before. `generate_number_of_scenes()`'s public name
+  and signature are unchanged -- only what it computes internally.
+- Output filename changed to make the semantics explicit and prevent
+  this confusion recurring: `floodscenescount_<tag>_<id>.tif` ->
+  `floodvalidscenecount_<tag>_<id>.tif`.
+- Verified: valid count + gap count == total scenes processed, at
+  every pixel, for a synthetic case with known per-pixel gaps. Also
+  added a test exercising the actual intended use case -- combining
+  `generate_number_of_scenes()`'s output with `monthly_sum()`'s output
+  to compute "fraction of valid observations flooded" per pixel, on a
+  synthetic multi-scene wet season with known flood/valid/gap pixels.
+
+**Added `tqdm` progress bars** across every real per-item pipeline
+loop -- `read_scenes()`, `generate_mean_std_by_aoi()`, `prepare_slope()`,
+`prepare_wet_scenes()`, `map_floods()`, `merge_floods_by_date()`,
+`generate_number_of_scenes()`, `monthly_sum()`, and
+`utils.download_nasadem()` -- using `tqdm.auto` (renders correctly in
+both notebooks and plain terminals) with `disable=None` (tqdm's own
+non-TTY auto-detection, so CI logs and any other non-interactive
+output stay clean -- verified the full test suite produces zero tqdm
+output under pytest's captured output). The existing one-line
+`logger.info(...)` summary at the end of each method is unchanged --
+tqdm shows live per-item progress, the log line still gives the final
+summary. `get_dry_dates()`, `generate_dry_date_ranges()`, and
+`get_s1_items()` were checked but have no per-item loop worth
+instrumenting (single combined STAC search / small nested
+comprehensions over date ranges, not a per-scene/per-AOI loop).
+Added `tqdm==4.70.0` as an explicit dependency (was not previously
+installed even transitively).
+
+Full test suite: 180 passing.
+
 ## 0.1.0a20
 
 **Fix two crashes in the streaming `map_floods()`'s `export_maps=True`/
