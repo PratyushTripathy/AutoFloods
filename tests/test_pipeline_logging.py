@@ -156,7 +156,7 @@ class TestPrepareSlope:
 
         monkeypatch.setattr(utils, 'gpd_to_json', lambda **k: [{'dummy': 'bbox'}])
         monkeypatch.setattr(autofloods.utils, 'download_nasadem', lambda *a, **k: MagicMock())
-        monkeypatch.setattr(autofloods.preprocessing, 'smoothen_slope', lambda *a, **k: MagicMock())
+        monkeypatch.setattr(autofloods.preprocessing, 'compute_slope', lambda *a, **k: MagicMock())
         monkeypatch.setattr(autofloods.preprocessing, 'clip_xarray_using_id', lambda *a, **k: MagicMock())
         monkeypatch.setattr(autofloods.utils, 'export_xarray', lambda *a, **k: None)
 

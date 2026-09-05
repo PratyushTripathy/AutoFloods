@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.1.0a16
+
+**Fixes the `prepare_slope()` out-of-memory crash reported on Google
+Colab** -- the two fixes shipped in 0.1.0a15 (leftover dry-season
+scene cleanup, windowed DEM reads) were real and are still in effect,
+but investigation found the actual dominant cause was a third,
+separate, more severe bug: `preprocessing.smoothen_slope()`'s
+neighborhood-averaging kernel.
+
+- **Removed `smoothen_slope()` entirely** (not just stopped calling
+  it) and replaced it with `preprocessing.compute_slope()`, which
+  returns raw, unsmoothed slope. The removed kernel used
+  `sklearn.feature_extraction.image.extract_patches_2d`, which
+  materializes a full array copy for *every* overlapping window
+  position rather than using an O(1)-memory sliding-window filter --
+  for a real ~100km tile at the default `buffer=500`/`cell_size=30`
+  (a 33x33 kernel), this required **~101 GB**, computed precisely from
+  real tile geometry and confirmed against a live `sklearn` call.
+  Independent of and much larger than the 0.1.0a15 fixes.
+- **Verified fixed, not just "should be fixed"**: re-ran the exact
+  crash scenario (tile 318, real data, `prepare_slope(dem_overview=1,
+  buffer=500)`) end-to-end -- previously a reliable `SIGKILL` even on
+  a 503GB-RAM machine, now completes with a real, bounded, measured
+  peak (945 MB).
+- **Known open question, not a regression**: `map_floods()`'s
+  `rel_slope_thd=20` default was implicitly tuned against *smoothed*
+  slope (the only place this was ever documented was the already-
+  deprecated `mapfloods.map_floods()` free function's docstring, now
+  corrected for accuracy). Whether 20 degrees still correctly separates
+  real terrain from flat ground against raw (noisier) slope is
+  genuinely unvalidated -- flagged in CLAUDE.md's Future To-Dos for
+  empirical validation against known flood/non-flood ground truth, not
+  guessed at here. If your results look different after upgrading,
+  this threshold is the first thing to check.
+- `scikit-learn` is now an unused dependency (kept in `pyproject.toml`
+  for this release; a future release may drop it).
+- Updated/renamed test coverage (`tests/test_preprocessing.py::
+  TestComputeSlope`, replacing `TestSmoothenSlope`), including a
+  regression guard confirming the removed kernel's imports can't
+  silently creep back in.
+
 ## 0.1.0a15
 
 **Windowed reads for `MPCSource`**: reading a scene no longer always

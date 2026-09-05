@@ -63,8 +63,10 @@ def map_floods(mean_std_by_aoi, wet_scenes_by_aoi, slope_path, vv_thd, vh_thd, r
     slope-masking step -- use ZScoreDetector.detect() plus
     flood_mapper's own slope-mask application instead. Runs
     map_anomaly_cells() per (AOI, scene), then zeroes out any cell whose
-    smoothed relative slope (see preprocessing.smoothen_slope) is at or
-    above `rel_slope_thd` -- steep terrain produces backscatter drops
+    relative slope (see preprocessing.compute_slope() -- raw/unsmoothed
+    since 2026-09-05; previously smoothed via a now-removed
+    neighborhood-averaging kernel, see that function's docstring) is at
+    or above `rel_slope_thd` -- steep terrain produces backscatter drops
     that mimic flooding without being flooded.
     """
     # generate id and scene wise anomaly cells

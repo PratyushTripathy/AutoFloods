@@ -175,38 +175,26 @@ class TestClipXarrayUsingId:
         assert result.sizes['x'] > 0 and result.sizes['y'] > 0
 
 
-class TestSmoothenSlope:
+class TestComputeSlope:
     """
-    smoothen_slope's own kernel-smoothing math (mean filter over a
-    (buffer*2 // cell_size)-sized, reflect-padded, odd-cell window) is
-    tested by patching out xrspatial.slope with a small, fully known
-    array -- this isolates the smoothing math from real DEM/slope
-    computation (which needs an actual DEM and is exercised via
-    flood_mapper.prepare_slope in integration, not here) while still
-    exercising the real clip_xarray_using_id reprojection step that
-    feeds it.
+    compute_slope() replaces the former smoothen_slope() (removed
+    2026-09-05): it computes raw, unsmoothed slope only -- no
+    neighborhood-averaging kernel. The kernel was removed entirely
+    (not just skipped) because sklearn.feature_extraction.image.
+    extract_patches_2d materializes a full array copy per overlapping
+    window position -- ~101 GB for a real ~100km tile at the default
+    buffer=500/cell_size=30, an out-of-memory crash confirmed
+    independent of the dry-season-baseline and DEM-read memory fixes
+    from the same night. These tests confirm compute_slope() returns
+    xrspatial.slope()'s raw output (with nodata-fill for DEM gaps)
+    unchanged, via the same clip_xarray_using_id reprojection step
+    smoothen_slope() used, without ever exercising the removed kernel
+    (nothing here should be able to reintroduce it).
     """
 
-    def _expected_mean_filter(self, arr, size):
-        """Reference implementation of the same reflect-padded mean
-        filter smoothen_slope implements by hand via
-        sklearn.feature_extraction.image.extract_patches_2d."""
-        pad = size // 2
-        padded = np.pad(arr, pad, mode='reflect')
-        out = np.zeros_like(arr, dtype='float64')
-        for i in range(arr.shape[0]):
-            for j in range(arr.shape[1]):
-                out[i, j] = padded[i:i + size, j:j + size].mean()
-        return out
-
-    def test_kernel_smoothing_matches_manual_mean_filter(self, tmp_path, monkeypatch):
+    def test_returns_raw_slope_unchanged(self, tmp_path, monkeypatch):
         grid_path = _make_grid_file(tmp_path)
         dem = _make_source_dataarray()
-
-        # buffer=90, cell_size=30 -> y_size = x_size = 180 // 30 = 6 -> odd -> 5
-        buffer = 90
-        cell_size = 30
-        kernel_size = 5
 
         fake_slope_values = np.arange(25, dtype='float64').reshape(5, 5)
         fake_slope = xr.DataArray(
@@ -215,33 +203,27 @@ class TestSmoothenSlope:
             coords={'y': np.arange(5), 'x': np.arange(5)},
         )
 
-        def fake_slope_fn(_arr):
-            return fake_slope
+        monkeypatch.setattr(preprocessing.xrspatial, 'slope', lambda _arr: fake_slope)
 
-        monkeypatch.setattr(preprocessing.xrspatial, 'slope', fake_slope_fn)
-
-        result = preprocessing.smoothen_slope(
+        result = preprocessing.compute_slope(
             dem_xarray=dem,
             grid_shapefile_path=grid_path,
             aoi_id='tile1',
             ref_xarray=dem,
-            buffer=buffer,
-            cell_size=cell_size,
+            buffer=90,
+            cell_size=30,
         )
 
-        expected = self._expected_mean_filter(fake_slope_values, kernel_size)
-        np.testing.assert_allclose(result.values, expected, rtol=1e-8)
+        # unsmoothed: exactly xrspatial.slope()'s own output, not a
+        # neighborhood average of it
+        np.testing.assert_array_equal(result.values, fake_slope_values)
         assert result.dims == fake_slope.dims
         np.testing.assert_array_equal(result['x'].values, fake_slope['x'].values)
         np.testing.assert_array_equal(result['y'].values, fake_slope['y'].values)
 
-    def test_nodata_fill_replaces_nan_before_smoothing(self, tmp_path, monkeypatch):
+    def test_nodata_fills_nan_slope_pixels(self, tmp_path, monkeypatch):
         grid_path = _make_grid_file(tmp_path)
         dem = _make_source_dataarray()
-
-        buffer = 90
-        cell_size = 30
-        kernel_size = 5
 
         values = np.ones((5, 5), dtype='float64')
         values[2, 2] = np.nan
@@ -252,25 +234,25 @@ class TestSmoothenSlope:
 
         monkeypatch.setattr(preprocessing.xrspatial, 'slope', lambda _arr: fake_slope)
 
-        result = preprocessing.smoothen_slope(
+        result = preprocessing.compute_slope(
             dem_xarray=dem, grid_shapefile_path=grid_path, aoi_id='tile1',
-            ref_xarray=dem, buffer=buffer, cell_size=cell_size, nodata=0,
+            ref_xarray=dem, buffer=90, cell_size=30, nodata=0,
         )
 
-        # NaN at (2,2) is filled with `nodata`=0 before the kernel runs,
-        # so no NaN should propagate into the smoothed output at all.
+        # A NaN slope pixel (DEM gap) must not survive: map_floods()'s
+        # rel_slope_thd comparison treats NaN as "masked out, not
+        # flooded" (NaN < threshold is always False), so an unfilled
+        # gap would silently behave differently from a filled one.
         assert not np.isnan(result.values).any()
-        expected = self._expected_mean_filter(
-            np.where(np.isnan(values), 0, values), kernel_size
-        )
-        np.testing.assert_allclose(result.values, expected, rtol=1e-8)
+        expected = np.where(np.isnan(values), 0, values)
+        np.testing.assert_array_equal(result.values, expected)
 
     def test_real_xrspatial_slope_end_to_end(self, tmp_path):
         """
         Not-mocked sanity check: a synthetic DEM with a real, gentle
         constant east-west gradient run through the real xrspatial.slope
-        + real smoothing kernel should produce a small, finite, roughly
-        uniform slope field (no NaNs, no wild pixel-to-pixel jumps).
+        (no smoothing kernel involved at all) should produce a small,
+        finite slope field (no NaNs).
         """
         grid_path = _make_grid_file(tmp_path)
         x_min, y_min, x_max, y_max = (84.9, 24.9, 85.6, 25.6)
@@ -282,7 +264,7 @@ class TestSmoothenSlope:
         dem = xr.DataArray(dem_values, dims=('y', 'x'), coords={'y': ys, 'x': xs})
         dem.rio.write_crs('EPSG:4326', inplace=True)
 
-        result = preprocessing.smoothen_slope(
+        result = preprocessing.compute_slope(
             dem_xarray=dem,
             grid_shapefile_path=grid_path,
             aoi_id='tile1',
@@ -293,6 +275,17 @@ class TestSmoothenSlope:
 
         assert np.isfinite(result.values).all()
         assert (result.values >= 0).all()  # xrspatial.slope is in degrees, non-negative
+
+    def test_does_not_import_sklearn_patch_extraction(self):
+        """
+        Regression guard for the actual fix: the removed kernel used
+        sklearn.feature_extraction.image.extract_patches_2d. Confirms
+        that dependency is no longer imported by this module at all --
+        the memory bomb can't be silently reintroduced via a stray
+        import surviving the removal.
+        """
+        assert not hasattr(preprocessing, 'image')
+        assert not hasattr(preprocessing, 'deepcopy')
 
 
 class TestReadSentinel1Stac:

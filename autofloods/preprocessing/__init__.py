@@ -6,8 +6,6 @@ import geopandas as gpd
 import xarray as xr
 import numpy as np
 import xrspatial
-from sklearn.feature_extraction import image
-from copy import deepcopy
 from ..utils import decibel_to_linear, default_max_workers, zone_to_epsg
 import concurrent.futures
 import gc
@@ -452,24 +450,38 @@ def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray, b
     )
 
 # define a function to calculate relative slope
-def smoothen_slope(dem_xarray, grid_shapefile_path, aoi_id, ref_xarray, buffer=None, nodata=0, cell_size=30):
+def compute_slope(dem_xarray, grid_shapefile_path, aoi_id, ref_xarray, buffer=None, nodata=0, cell_size=30):
     """
-    Compute slope from `dem_xarray` (xrspatial.slope, degrees) and smooth
-    it with a `buffer`-sized mean-filter kernel (odd cell count, reflect-
-    padded at the edges) rather than using raw per-pixel slope -- raw DEM
-    slope is noisy at Sentinel-1's working resolution, and the smoothed
-    version is what map_floods()'s relative-slope mask actually filters
-    on. `nodata` fills DEM gaps before the kernel runs so a single missing
-    DEM pixel doesn't propagate as NaN through its whole neighborhood.
-    `buffer` must match the buffer used when the DEM was downloaded
-    (download_nasadem via a buffered bbox) -- kept in sync by
-    flood_mapper.prepare_slope(), which passes the same buffer to both.
+    Compute raw (unsmoothed) slope from `dem_xarray` (xrspatial.slope,
+    degrees). `nodata` fills any NaN slope pixel (from a DEM gap) so it
+    doesn't get silently treated as "masked out, not flooded" wherever
+    map_floods()'s relative-slope threshold is later applied (NaN <
+    threshold is always False) -- kept for continuity with the prior
+    behavior even without a neighborhood kernel to protect from NaN
+    propagation. `buffer` (meters, in the AOI's own UTM zone) must
+    match the buffer used when the DEM was downloaded (download_nasadem
+    via a buffered bbox) -- kept in sync by flood_mapper.prepare_slope(),
+    which passes the same buffer to both.
+
+    Replaces the former smoothen_slope(), which additionally ran a
+    buffer-sized mean-filter kernel over the slope via
+    sklearn.feature_extraction.image.extract_patches_2d -- removed
+    entirely (2026-09-05), not just skipped, because that function
+    materializes a full-size array copy for every overlapping kernel
+    window position rather than using an O(1)-memory sliding-window
+    filter: for a real ~100km tile at the default buffer=500/cell_size=30
+    (33x33 kernel), this required ~101 GB, an out-of-memory crash
+    confirmed independent of (and much larger than) the dry-season-
+    baseline and DEM-read memory issues fixed the same night. See
+    CLAUDE.md's Future To-Dos for the rel_slope_thd=20 tuning caveat
+    this leaves open: that default was never explicitly documented as
+    tuned for smoothed vs. raw slope in the current (non-deprecated)
+    code path, but the deprecated autofloods.mapfloods.map_floods()
+    free function's docstring does describe the threshold as applying
+    to "smoothed relative slope" -- flagged, not resolved here.
 
     cell_size is the same explicit, forced grid resolution used
-    throughout this module (see clip_xarray_using_id's docstring) -- used
-    here both for the reprojection (via clip_xarray_using_id) and for
-    sizing the smoothing kernel in pixels (buffer / cell_size), instead
-    of re-deriving it from the just-reprojected data's own metadata.
+    throughout this module (see clip_xarray_using_id's docstring).
     """
     # clip the dem to the buffered GDF
     dem_xarray_clipped = clip_xarray_using_id(
@@ -484,24 +496,7 @@ def smoothen_slope(dem_xarray, grid_shapefile_path, aoi_id, ref_xarray, buffer=N
     # calculate the slope
     slope_xarray = xrspatial.slope(dem_xarray_clipped.squeeze())
 
-    # run a kernel to calculate smoothen slope
-    y_size = x_size = (buffer * 2) // cell_size # get number of cells for kernel
-
-    if y_size % 2 == 0:
-        y_size -= 1
-        x_size -= 1
-
-    slope_chips = deepcopy(slope_xarray.fillna(nodata))
-    slope_chips = np.pad(slope_chips, (int(y_size / 2), int(x_size / 2)), 'reflect')
-    slope_chips = image.extract_patches_2d(slope_chips, (y_size, x_size))
-
-    slope_mean = slope_chips.reshape(slope_chips.shape[0], -1).mean(axis=-1).reshape(slope_xarray.shape)
-
-    return xr.DataArray(
-        slope_mean,
-        dims=slope_xarray.dims,
-        coords=slope_xarray.coords
-    )
+    return slope_xarray.fillna(nodata)
 
 
 

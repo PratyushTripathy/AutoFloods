@@ -18,6 +18,7 @@ import autofloods.grid as grid
 from datetime import datetime
 import os, json, shutil
 import concurrent.futures
+import gc
 import logging
 import xarray as xr
 import numpy as np
@@ -712,6 +713,21 @@ class flood_mapper():
 
         self.load_mean_std_by_aoi()
 
+        # self.s1_dry_dict (every dry-season scene's raw VV/VH arrays,
+        # set by read_scenes()) is never read again after the
+        # reprojected_clipped_dry comprehension above -- nothing else in
+        # the pipeline references it. Left alive, it stays fully
+        # resident for the rest of this flood_mapper instance's life
+        # (prepare_slope(), map_floods(), everything after), for no
+        # reason. gc.collect() matters here, not just del: xarray/
+        # rioxarray objects (CRS wrappers, index caches) hold internal
+        # reference cycles plain refcounting can't free promptly --
+        # confirmed with the same measurement approach (real .nbytes
+        # sums, not just "deleted") when this was fixed for
+        # compute_dry_baseline_stats()'s per-scene fold loop.
+        del self.s1_dry_dict
+        gc.collect()
+
         logger.info(
             f'Baseline fit complete for {len(self.mean_std_by_aoi)} AOI(s): '
             f'{sorted(self.mean_std_by_aoi.keys())}'
@@ -744,16 +760,29 @@ class flood_mapper():
 
     def prepare_slope(self, dem_overview=1, nodata=0.0, buffer=500, max_workers=6):
         """
-        Compute (or reload from `slope_dir` if already cached) a smoothed
-        relative-slope raster per AOI, used by the detector's slope mask
-        to suppress false-positive floods on steep terrain. Downloads DEM
-        tiles via `self.source` only for AOIs missing a cached slope file
-        -- already-cached AOIs are skipped entirely, no DEM download.
-        `buffer` (meters, in the AOI's own UTM zone) must match what
-        smoothen_slope()'s kernel expects; passed through unchanged.
-        `max_workers` is DEM download concurrency (network-bound, passed
-        to utils.download_nasadem) -- separate from the CPU-bound
-        reprojection thread pools elsewhere in this class.
+        Compute (or reload from `slope_dir` if already cached) a raw
+        (unsmoothed) relative-slope raster per AOI, used by the
+        detector's slope mask to suppress false-positive floods on
+        steep terrain. Downloads DEM tiles via `self.source` only for
+        AOIs missing a cached slope file -- already-cached AOIs are
+        skipped entirely, no DEM download.
+
+        No longer smoothed with a neighborhood-averaging kernel (see
+        preprocessing.compute_slope()'s docstring, and the former
+        preprocessing.smoothen_slope() it replaces, removed 2026-09-05):
+        that kernel required ~101 GB for a real ~100km tile, an
+        out-of-memory crash confirmed independent of this method's own
+        DEM-read fix. `map_floods()`'s `rel_slope_thd` default was never
+        documented in this (non-deprecated) code path as tuned
+        specifically for smoothed vs. raw slope -- flagged as an open
+        question in CLAUDE.md's Future To-Dos, not resolved here.
+
+        `buffer` (meters, in the AOI's own UTM zone) is used both for
+        the DEM download's own buffer and passed through to
+        preprocessing.compute_slope(). `max_workers` is DEM download
+        concurrency (network-bound, passed to utils.download_nasadem)
+        -- separate from the CPU-bound reprojection thread pools
+        elsewhere in this class.
         """
         slope_id_to_process = [
             id
@@ -777,7 +806,7 @@ class flood_mapper():
             self.slope = dict()
             for id in slope_id_to_process:
                 print(f'Slope for tile ID {id} not found. Downloading DEM...')
-                self.slope[id] = autofloods.preprocessing.smoothen_slope(
+                self.slope[id] = autofloods.preprocessing.compute_slope(
                     dem_xarray=dem_merged_xarray,
                     grid_shapefile_path=self.grid_shapefile_path,
                     aoi_id=id,

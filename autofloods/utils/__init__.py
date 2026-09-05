@@ -419,12 +419,67 @@ def query_nasadem(aoi_union_bbox):
 
     return MPCSource().search_dem(aoi_union_bbox)
 
+# Buffer (degrees, native DEM CRS) added around a DEM tile's windowed
+# read -- same reproject-rounding safety margin as MPCSource's
+# _WINDOW_READ_BUFFER_M, expressed in degrees since NASADEM tiles are
+# natively EPSG:4326 (confirmed via STAC proj:code), not a projected
+# meters CRS. ~0.02 degrees is ~2km at these latitudes -- generous
+# relative to the sub-pixel rounding effect it guards against.
+_DEM_WINDOW_READ_BUFFER_DEG = 0.02
+
+
+def _bounds_from_geojson_bbox(bbox):
+    """(minx, miny, maxx, maxy) from a gpd_to_json()-style GeoJSON-like bbox dict."""
+    coords = bbox['coordinates'][0]
+    xs = [c[0] for c in coords]
+    ys = [c[1] for c in coords]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _windowed_bbox_for_dem_item(item, bbox_4326):
+    """
+    (minx, miny, maxx, maxy) in item's own CRS, buffered by
+    _DEM_WINDOW_READ_BUFFER_DEG, for a windowed DEM tile read -- only
+    if item is confirmed EPSG:4326 (true for every real NASADEM tile,
+    verified via its STAC proj:code/proj:epsg properties). Returns None
+    (falls back to a full, unwindowed read) for any other or unknown
+    CRS, since a degrees-denominated buffer isn't meaningful there --
+    windowing is an optimization, not a correctness requirement.
+    """
+    item_crs = item.properties.get('proj:code')
+    if item_crs is None:
+        epsg = item.properties.get('proj:epsg')
+        item_crs = f'EPSG:{epsg}' if epsg is not None else None
+    if item_crs != 'EPSG:4326':
+        return None
+
+    minx, miny, maxx, maxy = bbox_4326
+    return (
+        minx - _DEM_WINDOW_READ_BUFFER_DEG, miny - _DEM_WINDOW_READ_BUFFER_DEG,
+        maxx + _DEM_WINDOW_READ_BUFFER_DEG, maxy + _DEM_WINDOW_READ_BUFFER_DEG,
+    )
+
+
 def download_nasadem(bbox, source, overview_level=1, nodata=0.0, max_workers=6):
     """
     Search + read every DEM tile covering `bbox` and mosaic them into one
     DataArray (rioxarray_merge.merge_arrays -- last-tile-wins on overlap).
     `nodata` is the mosaic's fill value where no DEM tile covers a pixel,
     not a value found in the source data itself.
+
+    Each tile is windowed-read (clipped to `bbox`, buffered, BEFORE
+    materializing pixel data -- see open_rasterio_with_retry()'s bbox
+    parameter and MPCSource.read_vv_vh(), the same technique) rather
+    than reading its full native extent (a NASADEM tile covers a full
+    1x1 degree -- for one AOI tile, a buffered bbox commonly spans a
+    3x3 neighborhood of these, so 9 full-extent tiles reading at once
+    was a real, confirmed cause of an out-of-memory crash in
+    prepare_slope(), independent of and in addition to the dry-season
+    baseline OOM fixed in 0.1.0a12). The tiles are still collected into
+    a list before merge_arrays() -- unlike the dry-season baseline fix,
+    there's no incremental-reduce equivalent for a spatial mosaic merge
+    of a handful of tiles; the fix here is making each individual read
+    small, not eliminating the list.
 
     max_workers concurrent reads for the same I/O-bound reasons as
     flood_mapper.read_scenes() -- see the comment there. This is a
@@ -435,11 +490,16 @@ def download_nasadem(bbox, source, overview_level=1, nodata=0.0, max_workers=6):
     modest, source-tuned value here, not one that scales with cores.
     """
     dem_item_list = source.search_dem(bbox)
+    bbox_4326 = _bounds_from_geojson_bbox(bbox)
+
+    def _read_one(item):
+        window_bbox = _windowed_bbox_for_dem_item(item, bbox_4326)
+        return open_rasterio_with_retry(
+            source.dem_href(item), overview_level=overview_level, masked=True, bbox=window_bbox,
+        )
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        dem_xarray_list = list(executor.map(
-            lambda item: open_rasterio_with_retry(source.dem_href(item), overview_level=overview_level, masked=True),
-            dem_item_list,
-        ))
+        dem_xarray_list = list(executor.map(_read_one, dem_item_list))
 
     mosaic_xarray = rioxarray_merge.merge_arrays(dem_xarray_list, nodata=nodata)
 
