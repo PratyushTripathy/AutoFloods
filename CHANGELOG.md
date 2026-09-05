@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.1.0a17
+
+New opt-in flag; **default behavior is unchanged**.
+
+- **Added `keep_intermediate_in_memory` (default `False`) to
+  `flood_mapper.__init__()`.** Following the two memory leaks fixed in
+  0.1.0a15/0.1.0a16 (`self.s1_dry_dict`, `self.slope`), an audit found
+  both were genuinely never needed again in-process once written to
+  disk -- but keeping them around instead of re-reading from disk is a
+  legitimate choice on a RAM-rich machine (HPC node, local dev), where
+  the same amount of memory the default frees up doesn't matter and
+  the repeated disk I/O does.
+  - Default `False`: current behavior, unchanged -- `self.s1_dry_dict`
+    and `self.slope` are `del`eted (+ `gc.collect()`) as soon as their
+    pipeline step no longer needs them, and downstream steps that want
+    that data again (`map_floods()`'s slope mask) re-read it from disk.
+    Still the right choice for a constrained environment like Google
+    Colab (~12-13GB).
+  - `True`: both attributes stay resident, and `map_floods()` checks
+    `self.slope[id]` first, only falling back to its disk read if the
+    in-memory copy isn't there. Recommended only where the extra
+    memory is genuinely not a concern.
+- Audited the rest of the pipeline for the same "compute/read once,
+  then redundantly re-read from disk" pattern while implementing this.
+  Found one more real instance -- `monthly_sum()` ->
+  `postprocessing.aggregate_monthly()` re-reading
+  `self.flood_by_date[id]`'s data from disk -- deliberately **not**
+  fixed here (it needs restructuring `aggregate_monthly()`'s file-based
+  internals, not a simple check-self-first branch); tracked in
+  CLAUDE.md's Future To-Dos as its own follow-up.
+- Added 7 new tests covering both modes, including that `map_floods()`
+  never trusts a stale `self.slope` in the default (`False`) mode even
+  if one happens to exist.
+
 ## 0.1.0a16
 
 **Fixes the `prepare_slope()` out-of-memory crash reported on Google

@@ -89,7 +89,8 @@ class flood_mapper():
     def __init__(self, grid_shapefile=None, grid_id_list=None, dry_date_col='dry_month', id_col='ID',
                  dry_years=list(range(2015, 2021)), wet_duration=['2020/07', '2020/09'], slope_dir=None,
                  source=None, detector=None, output_dir=None, cell_size=30,
-                 aoi=None, grid_mode=None, grid_tile_size_km=None, grid_dry_months=None):
+                 aoi=None, grid_mode=None, grid_tile_size_km=None, grid_dry_months=None,
+                 keep_intermediate_in_memory=False):
         """
         Construct a flood_mapper and create its output directory tree.
         See the module-level pipeline overview in this class's docstring
@@ -160,6 +161,31 @@ class flood_mapper():
                                           generate_grid when `aoi` is given. Required in that
                                           case -- dry season is climate knowledge that can't be
                                           derived from AOI geometry alone.
+        keep_intermediate_in_memory     : bool
+                                          Default False -- the memory-conservative choice.
+                                          Large per-tile intermediates that are only needed
+                                          transiently (self.s1_dry_dict, the raw dry-season
+                                          scenes; self.slope, the per-tile slope raster) are
+                                          explicitly deleted (`del` + `gc.collect()`) as soon
+                                          as the pipeline step that needs them finishes, and
+                                          downstream steps that want that data again (e.g.
+                                          map_floods()'s slope mask) re-read it from disk
+                                          instead. This trades a little repeated I/O for a
+                                          much lower memory ceiling -- the difference between
+                                          crashing and not crashing on a memory-constrained
+                                          environment (e.g. Google Colab's ~12-13GB), where
+                                          this default is the safe choice.
+
+                                          Set to True to keep those intermediates resident
+                                          instead: nothing is deleted, and downstream steps
+                                          check the in-memory attribute first before falling
+                                          back to a disk read. This trades memory for reduced
+                                          repeated disk I/O -- recommended only on a machine
+                                          with ample RAM (a dedicated HPC node, a local dev
+                                          machine), where the extra few hundred MB per tile
+                                          this holds onto is not a concern. Do not use this on
+                                          a constrained environment like Colab -- it is the
+                                          opposite of what those environments need.
 
         Sets aoi_union/aoi_list (combined and per-AOI search bboxes), normalizes
         dry_years to a contiguous range, and populates already_processed_aoi_ids
@@ -183,6 +209,7 @@ class flood_mapper():
         """
         self.id_key = id_col
         self.dry_date_col = dry_date_col
+        self.keep_intermediate_in_memory = keep_intermediate_in_memory
         self.source = source if source is not None else sources.MPCSource()
         self.detector = detector if detector is not None else detectors.ZScoreDetector(vv_thd=-2.5, vh_thd=-2.5)
         self.cell_size = cell_size
@@ -725,8 +752,14 @@ class flood_mapper():
         # confirmed with the same measurement approach (real .nbytes
         # sums, not just "deleted") when this was fixed for
         # compute_dry_baseline_stats()'s per-scene fold loop.
-        del self.s1_dry_dict
-        gc.collect()
+        # keep_intermediate_in_memory=True skips this -- nothing
+        # downstream currently reads self.s1_dry_dict again either way,
+        # so True's only effect here is simply not freeing it (see the
+        # constructor docstring for the memory/IO tradeoff this flag is
+        # for).
+        if not self.keep_intermediate_in_memory:
+            del self.s1_dry_dict
+            gc.collect()
 
         logger.info(
             f'Baseline fit complete for {len(self.mean_std_by_aoi)} AOI(s): '
@@ -844,6 +877,18 @@ class flood_mapper():
             f'({len(slope_id_to_process)} newly computed)'
         )
 
+        # self.slope is only ever read within this method (written,
+        # exported to disk, done) -- map_floods() independently
+        # re-reads the slope raster from disk rather than using
+        # self.slope, so left alive it's dead weight for the rest of
+        # this instance's life. keep_intermediate_in_memory=True keeps
+        # it around instead, and map_floods() checks for it before
+        # falling back to its own disk read -- see this class's
+        # __init__ docstring for the memory/IO tradeoff.
+        if not self.keep_intermediate_in_memory:
+            del self.slope
+            gc.collect()
+
     def prepare_wet_scenes(self, overview_level=3, max_workers=6, reproject_max_workers=None):
         """
         Search, read, reproject, and clip every wet-season scene for each
@@ -949,7 +994,17 @@ class flood_mapper():
         if self.detector.requires_slope_mask:
             slope_path = os.path.join(self.slope_dir, SLOPE_OUTFILE)
             for id in self.flood_dict:
-                slope_xarray = xr.load_dataarray(slope_path.replace('_id.nc', f'_{id}.nc'), engine='rasterio')
+                # keep_intermediate_in_memory=True keeps prepare_slope()'s
+                # self.slope resident specifically so this doesn't have
+                # to re-read the same data from disk -- see __init__'s
+                # docstring for the tradeoff. Falls back to the disk
+                # read whenever the in-memory copy isn't there (default
+                # mode, or this id's slope was never computed/kept this
+                # run).
+                if self.keep_intermediate_in_memory and hasattr(self, 'slope') and id in self.slope:
+                    slope_xarray = self.slope[id]
+                else:
+                    slope_xarray = xr.load_dataarray(slope_path.replace('_id.nc', f'_{id}.nc'), engine='rasterio')
                 # xr.load_dataarray(..., engine='rasterio') does not wire
                 # up rioxarray's CRS accessor the way rioxarray.open_rasterio()
                 # does, even though the file has a spatial_ref coordinate --
