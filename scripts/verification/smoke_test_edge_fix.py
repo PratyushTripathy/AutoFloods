@@ -35,10 +35,10 @@ print('slope computed', flush=True)
 
 fm.prepare_wet_scenes(overview_level=2)
 for tid in TILE_IDS:
-    print(f'[{tid}] wet scenes: {len(fm.wet_scenes_by_aoi.get(tid, {}))}', flush=True)
+    print(f'[{tid}] wet scenes: {len(fm.wet_scene_paths.get(tid, {}))}', flush=True)
 
 fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20,
-              export_raster=False, export_vector=False, export_maps=False)
+              export_vector=False, export_maps=False)
 fm.merge_floods_by_date(export_raster=True)
 fm.generate_number_of_scenes(export_raster=True)
 fm.monthly_sum()

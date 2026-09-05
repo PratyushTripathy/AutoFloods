@@ -66,7 +66,7 @@ else:
     fm2.prepare_slope(dem_overview=0, buffer=500, max_workers=6)
     fm2.prepare_wet_scenes(overview_level=None, max_workers=6, reproject_max_workers=None)
     fm2.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20,
-                    export_raster=False, export_vector=False, export_maps=False)
+                    export_vector=False, export_maps=False)
     fm2.merge_floods_by_date(export_raster=True)
     fm2.generate_number_of_scenes(export_raster=True)
     fm2.monthly_sum()

@@ -803,3 +803,61 @@ def flood_data_3dstack(flood_data, date_index=-5):
         data_dict[key]
         for key in data_dict
         ])
+
+
+def combine_flood_dates_from_paths(scene_id_to_path, date_index=-5):
+    """
+    Same result as combine_flood_dates() ({date -> per-pixel-max combined
+    2D array}), but memory-bounded: reads only one date's worth of
+    exported classified rasters into memory at a time (typically 1,
+    occasionally a handful for same-day multi-track coverage), never the
+    whole wet season's scenes at once.
+
+    Deliberately groups by the ORIGINAL scene_id keys, not by parsing
+    the date back out of the exported .tif filename (as
+    combine_flood_dates()'s own list-of-paths branch does) --
+    map_floods()'s real export filenames
+    (floodextent_DRY_..._WET_..._{aoi_id}_{scene-id-suffix}.tif) have
+    several extra tokens ahead of the scene-id-derived suffix, so
+    date_index=-5 (tuned for a bare scene_id) lands on the wrong token
+    there. Grouping by scene_id first and only using the path to open
+    the file avoids that entirely.
+
+    Parameters
+    ----------
+    scene_id_to_path : dict[str, str]
+        {scene_id: path to that scene's exported classified .tif}, as
+        produced by flood_mapper.map_floods() (self.flood_dict[id]).
+    date_index : int
+        Passed through to _extract_date_token() -- see its docstring.
+
+    Returns
+    -------
+    dict[str, numpy.ndarray] : YYYYMMDD date -> combined 2D array.
+    """
+    paths_by_date = {}
+    for scene_id, path in scene_id_to_path.items():
+        date = _extract_date_token(scene_id, date_index)
+        paths_by_date.setdefault(date, []).append(path)
+
+    return {
+        date: np.maximum.reduce([rasterio.open(path).read(1) for path in paths])
+        for date, paths in sorted(paths_by_date.items())
+    }
+
+
+def flood_data_3dstack_from_paths(scene_id_to_path, date_index=-5):
+    """
+    combine_flood_dates_from_paths() + stack into one 3D array
+    (date, y, x) -- the disk-based, memory-bounded counterpart to
+    flood_data_3dstack(), for merge_floods_by_date() to use against
+    map_floods()'s exported-file self.flood_dict instead of an
+    in-memory array dict. Returns (dates, stack), same shape/contract
+    as flood_data_3dstack().
+    """
+    data_dict = combine_flood_dates_from_paths(scene_id_to_path, date_index=date_index)
+
+    return list(data_dict.keys()), np.stack([
+        data_dict[key]
+        for key in data_dict
+        ])

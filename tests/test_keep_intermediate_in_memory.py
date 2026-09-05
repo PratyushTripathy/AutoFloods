@@ -125,40 +125,66 @@ class TestMapFloodsUsesInMemorySlope:
     def _setup_for_map_floods(self, tmp_path, keep_in_memory, slope_available):
         fm = _make_flood_mapper(tmp_path, keep_intermediate_in_memory=keep_in_memory)
         fm.mean_std_by_aoi = {TILE_ID: _synthetic_grid_array()}
-        fm.wet_scenes_by_aoi = {TILE_ID: {'scene_a': MagicMock()}}
 
-        classified = xr.DataArray(np.array([[3, 0, 0], [0, 0, 0], [0, 0, 0]]))
+        wet_scene_path = tmp_path / 'wetscene_318_scene_a.nc'
+        xr.DataArray(
+            np.zeros((2, 3, 3)), dims=('band', 'y', 'x'), coords={'band': ['vv_ds', 'vh_ds']},
+        ).to_netcdf(wet_scene_path)
+        fm.wet_scene_paths = {TILE_ID: {'scene_a': str(wet_scene_path)}}
+
+        classified = xr.DataArray(
+            np.array([[3, 0, 0], [0, 0, 0], [0, 0, 0]]),
+            dims=('y', 'x'), coords={'y': [2, 1, 0], 'x': [0, 1, 2]},
+        )
         fm.detector = MagicMock()
         fm.detector.requires_slope_mask = True
         fm.detector.detect.return_value = classified
 
         if slope_available:
             fm.slope = {TILE_ID: _synthetic_grid_array()}
+        else:
+            # map_floods() falls back to a real disk read at this exact
+            # path when self.slope isn't available -- write a real file
+            # there (matching what prepare_slope() would have written)
+            # so that fallback read actually succeeds.
+            slope_path = os.path.join(fm.slope_dir, autofloods.SLOPE_OUTFILE).replace('_id.nc', f'_{TILE_ID}.nc')
+            utils.export_xarray(_synthetic_grid_array(), slope_path)
 
-        return fm
+        return fm, wet_scene_path
 
     def test_skips_disk_read_when_in_memory_slope_available(self, tmp_path):
-        fm = self._setup_for_map_floods(tmp_path, keep_in_memory=True, slope_available=True)
+        fm, wet_scene_path = self._setup_for_map_floods(tmp_path, keep_in_memory=True, slope_available=True)
 
-        with patch('autofloods.xr.load_dataarray') as mock_load:
-            fm.map_floods(export_raster=False, export_vector=False, export_maps=False)
+        with patch('autofloods.xr.load_dataarray', wraps=xr.load_dataarray) as mock_load:
+            fm.map_floods(export_vector=False, export_maps=False)
 
-        mock_load.assert_not_called()
+        # xr.load_dataarray IS called for the wet scene itself (always
+        # required) -- what must NOT happen is a second call for the
+        # slope raster, since self.slope was available in memory.
+        slope_load_calls = [c for c in mock_load.call_args_list if str(wet_scene_path) not in str(c.args[0])]
+        assert slope_load_calls == []
 
     def test_falls_back_to_disk_read_when_in_memory_slope_missing(self, tmp_path):
-        fm = self._setup_for_map_floods(tmp_path, keep_in_memory=True, slope_available=False)
+        fm, wet_scene_path = self._setup_for_map_floods(tmp_path, keep_in_memory=True, slope_available=False)
 
-        with patch('autofloods.xr.load_dataarray', return_value=_synthetic_grid_array()) as mock_load:
-            fm.map_floods(export_raster=False, export_vector=False, export_maps=False)
+        with patch('autofloods.xr.load_dataarray', wraps=xr.load_dataarray) as mock_load:
+            fm.map_floods(export_vector=False, export_maps=False)
 
-        mock_load.assert_called_once()
+        slope_load_calls = [c for c in mock_load.call_args_list if str(wet_scene_path) not in str(c.args[0])]
+        assert len(slope_load_calls) == 1
 
     def test_default_mode_always_reads_from_disk_even_if_slope_attribute_exists(self, tmp_path):
         # Simulates a stale self.slope left over from some other path --
         # default (False) mode must never trust it, always re-reading.
-        fm = self._setup_for_map_floods(tmp_path, keep_in_memory=False, slope_available=True)
+        fm, wet_scene_path = self._setup_for_map_floods(tmp_path, keep_in_memory=False, slope_available=True)
+        # also write the real on-disk slope file default mode is
+        # expected to read, since slope_available=True only sets
+        # fm.slope (which default mode must ignore) here, not the file.
+        slope_path = os.path.join(fm.slope_dir, autofloods.SLOPE_OUTFILE).replace('_id.nc', f'_{TILE_ID}.nc')
+        utils.export_xarray(_synthetic_grid_array(), slope_path)
 
-        with patch('autofloods.xr.load_dataarray', return_value=_synthetic_grid_array()) as mock_load:
-            fm.map_floods(export_raster=False, export_vector=False, export_maps=False)
+        with patch('autofloods.xr.load_dataarray', wraps=xr.load_dataarray) as mock_load:
+            fm.map_floods(export_vector=False, export_maps=False)
 
-        mock_load.assert_called_once()
+        slope_load_calls = [c for c in mock_load.call_args_list if str(wet_scene_path) not in str(c.args[0])]
+        assert len(slope_load_calls) == 1

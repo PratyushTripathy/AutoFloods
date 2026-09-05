@@ -19,6 +19,7 @@ from datetime import datetime
 import os, json, shutil
 import concurrent.futures
 import gc
+import itertools
 import logging
 import xarray as xr
 import numpy as np
@@ -74,12 +75,16 @@ class flood_mapper():
         -> prepare_wet_scenes() -> map_floods() -> merge_floods_by_date()
         -> generate_number_of_scenes() -> monthly_sum()
 
-    Each stage's output is cached to disk under `output_dir` (mean/std as
-    NetCDF, everything else as GeoTIFF/COG) and reloaded rather than
-    recomputed on a later run for the same tile/date range -- see
-    is_fully_processed()/expected_monthly_outfile() to check a tile's
-    completion status upfront, and already_processed_aoi_ids (set in
-    generate_defaults()) for the per-baseline resume mechanism.
+    Each stage's output is cached to disk under `output_dir` (mean/std
+    and wet-season scenes as NetCDF, everything else as GeoTIFF/COG)
+    and reloaded rather than recomputed on a later run for the same
+    tile/date range -- see is_fully_processed()/expected_monthly_outfile()
+    to check a tile's completion status upfront, and
+    already_processed_aoi_ids (set in generate_defaults()) for the
+    per-baseline resume mechanism. prepare_wet_scenes()'s per-scene
+    cache (self.wet_scene_paths) means map_floods() can be re-run any
+    number of times with different thresholds without re-triggering
+    prepare_wet_scenes()'s read/reproject work.
 
     Swappable via `source`/`detector`: any autofloods.sources.STACSource
     (MPCSource, OPERASource) and any autofloods.detectors.FloodDetector
@@ -279,6 +284,7 @@ class flood_mapper():
         self.folders_to_create = [
             self.output_base,
             os.path.join(self.output_base, 'mean_std'),
+            os.path.join(self.output_base, 'wet_scenes_cache'),
             os.path.join(self.output_base, 'flood_raster'),
             os.path.join(self.output_base, 'flood_raster', 'monthlyadded'),
             os.path.join(self.output_base, 'flood_vector'),
@@ -322,6 +328,7 @@ class flood_mapper():
         self.wet_aoi_scene_json_file = json_outfile.replace('.json', f'{dry_year_begin}_{dry_year_end}_wet_aoi_scene.json')
         self.wet_scene_aoi_json_file = json_outfile.replace('.json', f'{dry_year_begin}_{dry_year_end}_wet_scene_aoi.json')
         self.nc_outfile = nc_outfile.replace('aoi_', f'{dry_year_begin}_{dry_year_end}_aoi_')
+        self.wet_scenes_cache_dir = os.path.join(self.output_base, 'wet_scenes_cache')
 
         # An AOI counts as "already processed" (dry-season baseline can be
         # skipped and reloaded from disk) only if its mean/std NetCDF
@@ -894,16 +901,39 @@ class flood_mapper():
         Search, read, reproject, and clip every wet-season scene for each
         AOI onto that AOI's baseline grid (ref_xarray=mean_std_by_aoi[id]) --
         must run after generate_mean_std_by_aoi(), which that reference
-        grid comes from. Sets self.wet_scenes_by_aoi:
-        {aoi_id: {scene_id: DataArray with band coord ['vv_ds', 'vh_ds']}},
-        ready for map_floods() to classify directly against mean_std_by_aoi.
+        grid comes from.
 
-        max_workers controls read_scenes()'s download concurrency (network-
-        bound); reproject_max_workers is a separate thread pool for the
-        per-scene reproject+clip loop below (CPU-bound) -- same GIL-
-        releasing-GDAL-warp pattern as preprocessing.reproject_clip_stac().
-        None (default) uses utils.default_max_workers() -- (available
-        CPUs - 1) on whatever system this runs on.
+        Unlike the raw network read below (self.s1_wet_dict, bulk/
+        concurrent -- unchanged, same as read_scenes() always was), the
+        reproject+clip step is a bounded sliding window (same pattern as
+        preprocessing.compute_dry_baseline_stats()/utils.download_nasadem()):
+        at most `reproject_max_workers` scenes are ever resident at once,
+        each written straight to a persistent per-scene cache file
+        (self.wet_scenes_cache_dir/wetscene_<aoi_id>_<scene_id>.nc) and
+        discarded immediately after -- never a full in-memory dict of
+        every wet scene, which is what actually caused the OOM risk this
+        replaces. The cache is resumable: a scene whose .nc already
+        exists (from an earlier run, or a run interrupted mid-tile) is
+        loaded rather than re-read/re-reprojected, and survives a crash
+        anywhere later in the pipeline (map_floods(), etc.).
+
+        Sets self.wet_scene_paths: {aoi_id: {scene_id: path to that
+        scene's cached .nc}} -- map_floods() reads from this, not from
+        an in-memory dict, and can be called (and re-called, with
+        different thresholds) any number of times afterward without
+        re-triggering any of this. Also sets a private
+        self._wet_scene_gap_count_by_aoi: {aoi_id: 2D numpy int array},
+        a per-pixel count of scenes with a NaN/gap observation, folded
+        in one scene at a time as each is processed -- generate_number_
+        of_scenes() reads this directly instead of re-deriving it from
+        the (no-longer-fully-resident) wet scenes.
+
+        max_workers controls read_scenes()'s download concurrency
+        (network-bound); reproject_max_workers bounds the sliding
+        window above (CPU-bound reprojection) -- same GIL-releasing-
+        GDAL-warp pattern as preprocessing.reproject_clip_stac(). None
+        (default) uses utils.default_max_workers() -- (available CPUs
+        - 1) on whatever system this runs on.
         """
         if reproject_max_workers is None:
             reproject_max_workers = autofloods.utils.default_max_workers()
@@ -911,65 +941,117 @@ class flood_mapper():
         self.get_s1_items(dry_wet='wet')
         self.read_scenes(dry_wet='wet', overview_level=overview_level, max_workers=max_workers)
 
-        # loop through each id and clip every S1 wet scene, concurrently
-        def _clip_one_scene(id, scene_id):
-            return scene_id, xr.concat(
-                [
-                    autofloods.preprocessing.clip_xarray_using_id(
-                        data_xarray=self.s1_wet_dict[scene_id]['vv_ds'],
-                        grid_shapefile_path=self.grid_shapefile_path,
-                        aoi_id=id,
-                        ref_xarray=self.mean_std_by_aoi[id],
-                        cell_size=self.cell_size,
-                    ),
-                    autofloods.preprocessing.clip_xarray_using_id(
-                        data_xarray=self.s1_wet_dict[scene_id]['vh_ds'],
-                        grid_shapefile_path=self.grid_shapefile_path,
-                        aoi_id=id,
-                        ref_xarray=self.mean_std_by_aoi[id],
-                        cell_size=self.cell_size,
-                    )
-                ], dim='band').assign_coords(band=['vv_ds', 'vh_ds'])
+        def _cache_path(aoi_id, scene_id):
+            return os.path.join(self.wet_scenes_cache_dir, f'wetscene_{aoi_id}_{scene_id}.nc')
 
-        self.wet_scenes_by_aoi = {}
-        for id in self.wet_aoi_scene_dict:
-            scene_out = {}
-            with concurrent.futures.ThreadPoolExecutor(max_workers=reproject_max_workers) as executor:
-                futures = [
-                    executor.submit(_clip_one_scene, id, scene_id)
-                    for scene_id in self.wet_aoi_scene_dict[id]
-                ]
-                for future in concurrent.futures.as_completed(futures):
-                    scene_id, result = future.result()
-                    scene_out[scene_id] = result
-            self.wet_scenes_by_aoi[id] = scene_out
+        def _process_one_scene(aoi_id, scene_id):
+            cache_path = _cache_path(aoi_id, scene_id)
+            if os.path.exists(cache_path):
+                scene = xr.load_dataarray(cache_path)
+            else:
+                scene = xr.concat(
+                    [
+                        autofloods.preprocessing.clip_xarray_using_id(
+                            data_xarray=self.s1_wet_dict[scene_id]['vv_ds'],
+                            grid_shapefile_path=self.grid_shapefile_path,
+                            aoi_id=aoi_id,
+                            ref_xarray=self.mean_std_by_aoi[aoi_id],
+                            cell_size=self.cell_size,
+                        ),
+                        autofloods.preprocessing.clip_xarray_using_id(
+                            data_xarray=self.s1_wet_dict[scene_id]['vh_ds'],
+                            grid_shapefile_path=self.grid_shapefile_path,
+                            aoi_id=aoi_id,
+                            ref_xarray=self.mean_std_by_aoi[aoi_id],
+                            cell_size=self.cell_size,
+                        )
+                    ], dim='band').assign_coords(band=['vv_ds', 'vh_ds'])
+                # handle nodata (was a separate second pass over every
+                # scene of every AOI; now per-scene, right before caching)
+                scene = scene.where(scene < 50, np.nan)
+                scene.to_netcdf(cache_path)
 
-        # handle no data
-        for id in self.wet_scenes_by_aoi:
-            for scene_id in self.wet_scenes_by_aoi[id]:
-                self.wet_scenes_by_aoi[id][scene_id] = self.wet_scenes_by_aoi[id][scene_id].where(
-                    self.wet_scenes_by_aoi[id][scene_id] < 50, np.nan)
+            gap_mask = np.any(np.isnan(scene.values), axis=0)
+            return aoi_id, scene_id, cache_path, gap_mask
 
-        n_scenes = sum(len(v) for v in self.wet_scenes_by_aoi.values())
+        self.wet_scene_paths = {}
+        self._wet_scene_gap_count_by_aoi = {}
+
+        pending = [
+            (aoi_id, scene_id)
+            for aoi_id in self.wet_aoi_scene_dict
+            for scene_id in self.wet_aoi_scene_dict[aoi_id]
+        ]
+        remaining = iter(pending)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=reproject_max_workers) as executor:
+            in_flight = set()
+            for aoi_id, scene_id in itertools.islice(remaining, reproject_max_workers):
+                in_flight.add(executor.submit(_process_one_scene, aoi_id, scene_id))
+
+            while in_flight:
+                done, in_flight = concurrent.futures.wait(
+                    in_flight, return_when=concurrent.futures.FIRST_COMPLETED
+                )
+                for future in done:
+                    aoi_id, scene_id, cache_path, gap_mask = future.result()
+
+                    self.wet_scene_paths.setdefault(aoi_id, {})[scene_id] = cache_path
+
+                    if aoi_id not in self._wet_scene_gap_count_by_aoi:
+                        self._wet_scene_gap_count_by_aoi[aoi_id] = np.zeros(gap_mask.shape, dtype=int)
+                    self._wet_scene_gap_count_by_aoi[aoi_id] += gap_mask.astype(int)
+
+                    next_item = next(remaining, None)
+                    if next_item is not None:
+                        in_flight.add(executor.submit(_process_one_scene, *next_item))
+
+        # self.s1_wet_dict (every wet-season scene's raw VV/VH arrays)
+        # is never read again after the reproject loop above -- same
+        # leak class as self.s1_dry_dict (fixed in 0.1.0a17), just
+        # never patched on the wet side until now.
+        if not self.keep_intermediate_in_memory:
+            del self.s1_wet_dict
+            gc.collect()
+
+        n_scenes = sum(len(v) for v in self.wet_scene_paths.values())
         logger.info(
-            f'Wet-season scenes prepared for {len(self.wet_scenes_by_aoi)} AOI(s), '
+            f'Wet-season scenes prepared for {len(self.wet_scene_paths)} AOI(s), '
             f'{n_scenes} scene(s) total'
         )
 
-    def map_floods(self, vv_thd=-3, vh_thd=-3, rel_slope_thd=20, export_raster=True, export_vector=False, export_maps=False):
+    def map_floods(self, vv_thd=-3, vh_thd=-3, rel_slope_thd=20, export_vector=False, export_maps=False):
         """
         Classify every wet-season scene against its AOI's baseline
         (self.detector.detect()), apply the slope mask if the detector
-        needs one, and set self.flood_dict: {aoi_id: {scene_id: classified
-        DataArray}} (0/1/2/3 -- see detectors.ZScoreDetector). Per-scene
-        exports (export_raster/export_vector/export_maps, all default
-        False except export_raster) are one file per scene -- for the
-        per-date/per-month aggregates actually used downstream, see
-        merge_floods_by_date()/monthly_sum() instead. NOTE: export_vector's
-        and the raster export's output filenames derive the date/track
-        suffix from scene_id.split('_')[4:], which assumes MPC-style scene
-        IDs -- an OPERA_PASS_{date} scene_id (3 tokens) yields an empty
-        suffix there, not a crash, just a less-informative filename.
+        needs one, and export each scene's classified flood raster to
+        disk one at a time. Sets self.flood_dict: {aoi_id: {scene_id:
+        path to that scene's exported classified .tif}} -- a dict of
+        file paths, not arrays (0/1/2/3 encoding -- see
+        detectors.ZScoreDetector -- baked into the exported raster's
+        pixel values).
+
+        Reads one wet scene at a time from prepare_wet_scenes()'s
+        persistent disk cache (self.wet_scene_paths), classifies it,
+        slope-masks it, writes it, and discards it before moving to the
+        next -- never holding more than one scene's classified array in
+        memory. The wet-scene cache doesn't depend on vv_thd/vh_thd/
+        rel_slope_thd, so this method is safe to call again with
+        different thresholds without re-triggering prepare_wet_scenes()'s
+        read/reproject work -- each call just re-reads the same cached
+        scenes and overwrites its own output files.
+
+        Raster export is no longer optional (make this the only path --
+        there's no in-memory classified array left to keep around if it
+        weren't written, and merge_floods_by_date()/generate_number_of_
+        scenes() now read self.flood_dict's paths from disk). export_vector/
+        export_maps (still optional, off by default) reload a scene's
+        just-written raster from disk one at a time when requested.
+        NOTE: export_vector's and the raster export's output filenames
+        derive the date/track suffix from scene_id.split('_')[4:], which
+        assumes MPC-style scene IDs -- an OPERA_PASS_{date} scene_id (3
+        tokens) yields an empty suffix there, not a crash, just a
+        less-informative filename.
         """
         # keep backward-compatible per-call threshold overrides for detectors
         # that expose them (e.g. ZScoreDetector); a detector without these
@@ -979,21 +1061,20 @@ class flood_mapper():
         if hasattr(self.detector, 'vh_thd'):
             self.detector.vh_thd = vh_thd
 
-        # generate id and scene wise anomaly cells
-        self.flood_dict = {
-            id: {
-                scene_id: self.detector.detect(
-                    self.mean_std_by_aoi[id], self.wet_scenes_by_aoi[id][scene_id]
-                )
-                for scene_id in self.wet_scenes_by_aoi[id]
-            }
-            for id in self.mean_std_by_aoi
-        }
+        dry_year_begin = min(self.dry_years)
+        dry_year_end = max(self.dry_years)
+        wet_yearmonth_begin = self.wet_yearmonths[0]
+        wet_yearmonth_end = self.wet_yearmonths[-1]
+        flood_raster_outfile = os.path.join(self.output_base, 'flood_raster', 'floodextent_id.tif')
 
-        # apply relative slope mask, if this detector needs it
-        if self.detector.requires_slope_mask:
-            slope_path = os.path.join(self.slope_dir, SLOPE_OUTFILE)
-            for id in self.flood_dict:
+        self.flood_dict = {}
+        n_scenes = 0
+        n_flooded = 0
+
+        for id in self.wet_scene_paths:
+            slope_xarray = None
+            if self.detector.requires_slope_mask:
+                slope_path = os.path.join(self.slope_dir, SLOPE_OUTFILE)
                 # keep_intermediate_in_memory=True keeps prepare_slope()'s
                 # self.slope resident specifically so this doesn't have
                 # to re-read the same data from disk -- see __init__'s
@@ -1034,66 +1115,63 @@ class flood_mapper():
                 slope_xarray = slope_xarray.rio.reproject_match(
                     self.mean_std_by_aoi[id], resampling=Resampling.nearest
                 )
-                for scene_id in self.flood_dict[id]:
-                    self.flood_dict[id][scene_id] = self.flood_dict[id][scene_id].where(
-                        slope_xarray.values[0, :, :] < rel_slope_thd, 0
-                    )
 
-        n_scenes = sum(len(v) for v in self.flood_dict.values())
-        n_flooded = sum(
-            int((scene == 3).sum())
-            for scenes in self.flood_dict.values()
-            for scene in scenes.values()
-        )
+            scene_out = {}
+            for scene_id, wet_scene_path in self.wet_scene_paths[id].items():
+                wet_scene = xr.load_dataarray(wet_scene_path)
+                classified = self.detector.detect(self.mean_std_by_aoi[id], wet_scene)
+                del wet_scene
+
+                if slope_xarray is not None:
+                    classified = classified.where(slope_xarray.values[0, :, :] < rel_slope_thd, 0)
+
+                n_scenes += 1
+                n_flooded += int((classified == 3).sum())
+
+                outfile_flood = flood_raster_outfile.replace(
+                    '_id.tif',
+                    f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{"_".join(scene_id.split("_")[4:])}.tif'
+                )
+                autofloods.utils.export_xarray(classified, outfile_flood)
+                scene_out[scene_id] = outfile_flood
+                del classified
+
+            self.flood_dict[id] = scene_out
+
         logger.info(
             f'Flood maps generated for {len(self.flood_dict)} AOI(s), {n_scenes} scene(s): '
             f'{n_flooded} high-confidence flooded pixels'
         )
 
-        dry_year_begin = min(self.dry_years)
-        dry_year_end = max(self.dry_years)
-        wet_yearmonth_begin = self.wet_yearmonths[0]
-        wet_yearmonth_end = self.wet_yearmonths[-1]
-
-        # export the flood rasters
-        flood_raster_outfile = os.path.join(self.output_base, 'flood_raster', 'floodextent_id.tif')
-        if export_raster == True:
-            for id in self.flood_dict:
-                for scene_id in self.flood_dict[id]:
-                    outfile_flood = flood_raster_outfile.replace('_id.tif', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{"_".join(scene_id.split("_")[4:])}.tif')
-                    autofloods.utils.export_xarray(self.flood_dict[id][scene_id], outfile_flood)
-
-        # polygonize the flood rasters
+        # polygonize the flood rasters, one scene at a time from the
+        # just-written classified raster (opt-in, off by default)
         if export_vector == True:
-            self.flood_gdf_dict = {
-                id: {
-                    scene_id: autofloods.postprocessing.polygonize_flood_raster(self.flood_dict[id][scene_id])
-                    for scene_id in self.flood_dict[id]
-                }
-                for id in self.flood_dict
-            }
+            self.flood_gdf_dict = {id: {} for id in self.flood_dict}
 
             flood_vector_outfile = os.path.join(self.output_base, 'flood_vector', 'floodextent_id.gpkg')
             for id in self.flood_dict:
-                for scene_id in self.flood_dict[id]:
+                for scene_id, flood_path in self.flood_dict[id].items():
+                    classified = xr.load_dataarray(flood_path, engine='rasterio')
+                    gdf = autofloods.postprocessing.polygonize_flood_raster(classified)
                     outfile_flood = flood_vector_outfile.replace('_id.gpkg', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{"_".join(scene_id.split("_")[4:])}.gpkg')
                     # export only if the GDF has any flood cells
-                    if self.flood_gdf_dict[id][scene_id].shape[0] > 0:
-                        self.flood_gdf_dict[id][scene_id].to_crs("EPSG:4326").to_file(outfile_flood, index=False)
+                    if gdf.shape[0] > 0:
+                        gdf.to_crs("EPSG:4326").to_file(outfile_flood, index=False)
+                        self.flood_gdf_dict[id][scene_id] = gdf
                     else:
-                        # remove that scene_id from the dictionary to avoid exporting map later
-                        del self.flood_gdf_dict[id][scene_id]
                         print(f'Flood cells not found in {id}_{scene_id}.')
 
-        # export flood maps as images
+        # export flood maps as images, one scene at a time from the
+        # just-written classified raster (opt-in, off by default)
         if export_maps == True:
             flood_map_outfile = os.path.join(self.output_base, 'flood_image', 'floodmap_id.png')
             for id in self.flood_dict:
-                for scene_id in self.flood_dict[id]:
+                for scene_id, flood_path in self.flood_dict[id].items():
+                    classified = xr.load_dataarray(flood_path, engine='rasterio')
                     outfile_flood = flood_map_outfile.replace('_id.png', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{"_".join(scene_id.split("_")[4:])}.png')
 
                     mapfloods.flood_images(
-                        flood_xarray=self.flood_dict[id][scene_id],
+                        flood_xarray=classified,
                         outfile_flood=outfile_flood
                     )
 
@@ -1152,9 +1230,13 @@ class flood_mapper():
     def merge_floods_by_date(self, export_raster=False):
         """
         Collapse map_floods()'s per-scene classifications into one band
-        per observed DATE per AOI (utils.flood_data_3dstack -- same-date
-        scenes take the per-pixel max, so any scene flagging a pixel
-        flooded wins for that date). Sets self.flood_by_date and, if
+        per observed DATE per AOI (utils.flood_data_3dstack_from_paths --
+        same-date scenes take the per-pixel max, so any scene flagging a
+        pixel flooded wins for that date). Reads map_floods()'s exported
+        classified rasters from disk (self.flood_dict's paths) one
+        date's worth at a time -- typically 1 scene, occasionally a
+        handful for same-day multi-track coverage -- never the whole
+        wet season's scenes at once. Sets self.flood_by_date and, if
         export_raster, writes 'floodextentstacked_<DRY_..._WET_...>_<id>.tif'
         (band descriptions are the sorted date strings) and populates
         self.flood_raster_dict -- the input aggregate_monthly()/monthly_sum()
@@ -1166,7 +1248,7 @@ class flood_mapper():
 
         for id in self.flood_dict:
             if len(self.flood_dict[id]) > 0: # process only if there is a wet scene (throws error otherwise)
-                dates_list, floods_stacked = autofloods.utils.flood_data_3dstack(self.flood_dict[id])
+                dates_list, floods_stacked = autofloods.utils.flood_data_3dstack_from_paths(self.flood_dict[id])
                 self.flood_by_date[id] = xr.DataArray(
                     floods_stacked,
                     dims=['date', 'y', 'x'],
@@ -1212,23 +1294,27 @@ class flood_mapper():
         Worth double-checking against intent before relying on this for
         anything beyond a rough QA signal for coverage gaps. Writes
         'floodscenescount_<DRY_..._WET_...>_<id>.tif' if export_raster.
+
+        Reads self._wet_scene_gap_count_by_aoi -- a per-pixel running
+        count folded in one scene at a time by prepare_wet_scenes(), as
+        each wet scene was processed -- rather than re-deriving this
+        from a full in-memory dict of every wet scene's array (which no
+        longer exists; see prepare_wet_scenes()'s docstring). Same
+        result as the old stack-then-sum, just accumulated instead of
+        materialized: sum is associative regardless of processing order.
         """
         self.scene_count = dict()
 
-        for id in self.wet_scenes_by_aoi:
-            if len(self.wet_scenes_by_aoi[id]) > 0: # process only if there is a wet scene (throws error otherwise)
-                self.scene_count[id] = xr.DataArray(np.stack([
-                    np.any(np.isnan(
-                        self.wet_scenes_by_aoi[id][key]
-                    ), axis=0)
-                    for key in self.wet_scenes_by_aoi[id]
-                    ]).sum(axis=0),
-                                                    dims=self.mean_std_by_aoi[id].dims[1:],
-                                                    coords={
-                                                        'y':self.mean_std_by_aoi[id].coords['y'],
-                                                        'x':self.mean_std_by_aoi[id].coords['x']
-                                                    }
-                                                    )
+        for id in self._wet_scene_gap_count_by_aoi:
+            if id in self.wet_scene_paths and len(self.wet_scene_paths[id]) > 0: # process only if there is a wet scene (throws error otherwise)
+                self.scene_count[id] = xr.DataArray(
+                    self._wet_scene_gap_count_by_aoi[id],
+                    dims=self.mean_std_by_aoi[id].dims[1:],
+                    coords={
+                        'y':self.mean_std_by_aoi[id].coords['y'],
+                        'x':self.mean_std_by_aoi[id].coords['x']
+                    }
+                )
 
         logger.info(f'Scene-count raster computed for {len(self.scene_count)} AOI(s)')
 
@@ -1299,9 +1385,13 @@ class flood_mapper():
         create_out_dirs() for folder order; folders_to_create[-1] is
         the DEM/slope cache, excluded unless remove_slope=True since
         slope is expensive to recompute and reusable across years for
-        the same AOI). Destructive and immediate -- no confirmation, no
-        recycle bin. Not currently called anywhere in this package;
-        provided for callers who want to reclaim disk space between runs.
+        the same AOI). This includes wet_scenes_cache/ (prepare_wet_
+        scenes()'s persistent per-scene cache, one reprojected NetCDF
+        per wet scene -- can be sizeable, since it holds every wet
+        scene at full tile resolution). Destructive and immediate --
+        no confirmation, no recycle bin. Not currently called anywhere
+        in this package; provided for callers who want to reclaim disk
+        space between runs.
         """
         if remove_slope:
             folders_to_delete = self.folders_to_create[1:]

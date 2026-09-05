@@ -1,4 +1,18 @@
 """
+STALE as of 2026-09-05, not fixed: the wet-season streaming restructure
+(prepare_wet_scenes() writing a persistent per-scene disk cache + a
+streaming gap-count accumulator, instead of an in-memory
+self.wet_scenes_by_aoi dict; map_floods() reading self.wet_scene_paths,
+not self.wet_scenes_by_aoi) means this script's own wet_scenes_seq()/
+wet_scenes_threaded() helpers -- which hand-build a wet_scenes_by_aoi-
+shaped dict to compare sequential vs threaded reprojection -- no longer
+match what map_floods() expects, and the sequential-vs-threaded
+reprojection-loop comparison this script exists for doesn't apply to
+the new bounded-sliding-window architecture at all (there is no single
+"loop structure" left to swap between). Left unmodified rather than
+half-fixed: rewriting it to compare something meaningful under the new
+architecture is a separate task, not a mechanical fix.
+
 Real apples-to-apples full-pipeline comparison: baseline (current
 sequential production code) vs optimized (ThreadPoolExecutor(max_workers=8)
 around the per-scene reproject/clip loops -- the winning approach from
@@ -230,7 +244,7 @@ def run_variant(name, threaded):
     # detection, merge, monthly -- REAL production code, unmodified, same for both variants
     t0 = time.time()
     fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20,
-                  export_raster=False, export_vector=False, export_maps=False)
+                  export_vector=False, export_maps=False)
     fm.merge_floods_by_date(export_raster=True)
     fm.generate_number_of_scenes(export_raster=True)
     fm.monthly_sum()

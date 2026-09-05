@@ -111,11 +111,28 @@ fm.prepare_slope(dem_overview=0, buffer=500)  # compute/cache the terrain-slope 
 
 fm.prepare_wet_scenes(overview_level=None, max_workers=6)  # search, read, reproject wet-season scenes
 fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20,
-              export_raster=False, export_vector=False, export_maps=False)  # classify each scene against the baseline
+              export_vector=False, export_maps=False)  # classify each scene against the baseline
 fm.merge_floods_by_date(export_raster=True)       # collapse per-scene results into one band per date
 fm.generate_number_of_scenes(export_raster=True)  # per-pixel count of scenes with data gaps
 fm.monthly_sum()                      # aggregate per-date results into per-month flood-day counts
 ```
+
+`prepare_wet_scenes()` reprojects each wet-season scene once and caches
+it to disk (`output_dir/tile<id>/wet_scenes_cache/`) rather than
+keeping every scene in memory -- this is what keeps memory bounded
+regardless of how many wet-season scenes an AOI has, instead of scaling
+with scene count. One consequence worth knowing: **`map_floods()` can
+be called again with different `vv_thd`/`vh_thd`/`rel_slope_thd` values
+without re-running `prepare_wet_scenes()`** -- it just re-reads the same
+cached scenes and overwrites its own classified output, so re-tuning
+thresholds doesn't require re-downloading or re-reprojecting anything.
+
+**Breaking change (0.1.0a19)**: `map_floods()`'s `export_raster`
+parameter has been removed -- every scene's classified raster is now
+always written to disk (there's no longer an in-memory result to keep
+around if it weren't). If you have an existing script that calls
+`fm.map_floods(..., export_raster=False)` or `export_raster=True`,
+drop that argument -- passing it now raises `TypeError`.
 
 This is the exact method sequence `run_autofloods.py` (Option 2 below)
 drives internally -- see the `flood_mapper` class docstring in the [API
@@ -180,10 +197,24 @@ after a partial failure without redoing finished tiles.
 For each AOI, under `output_dir/tile<id>/`:
 
 - `mean_std/` -- the dry-season Z-score baseline (NetCDF).
+- `wet_scenes_cache/` -- one reprojected wet-season scene per file
+  (NetCDF), written by `prepare_wet_scenes()`. This is a persistent,
+  resumable cache: re-running `prepare_wet_scenes()` (in this run or a
+  later one) skips re-reading/re-reprojecting any scene whose cache
+  file already exists, and `map_floods()` reads from here rather than
+  keeping every scene in memory -- see the note on re-running
+  `map_floods()` with different thresholds, above. Not a final
+  deliverable; safe to delete once you're done with an AOI (or via
+  `flood_mapper.flush_output()`).
+- `flood_raster/floodextent_<tag>_<id>_<scene-suffix>.tif` -- one
+  classified flood raster per wet-season scene, written by
+  `map_floods()` (always, as of 0.1.0a19 -- see the breaking-change
+  note above).
 - `flood_raster/floodextentstacked_<tag>/` -- one classified flood raster
   per observed wet-season date.
 - `flood_raster/monthlyadded_<tag>/` -- per-month flood-day-count
   rasters, the final deliverable most downstream analysis uses.
 
 All GeoTIFF output is written as Cloud Optimized GeoTIFF (tiled,
-DEFLATE-compressed, with overviews).
+DEFLATE-compressed, with overviews); the wet-season scene cache is
+plain NetCDF.

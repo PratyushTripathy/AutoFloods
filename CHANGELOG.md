@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.1.0a19
+
+**Major architectural fix: the wet-season pipeline (`prepare_wet_scenes()`
+-> `map_floods()` -> `merge_floods_by_date()`/`generate_number_of_scenes()`)
+now processes one scene at a time via a disk cache, instead of holding
+every wet-season scene in memory at once.** This was the same class of
+OOM risk as the dry-season baseline (0.1.0a12) and slope (0.1.0a16)
+fixes, just not yet addressed on the wet-season side.
+
+- **`prepare_wet_scenes()`** now reprojects each scene through a
+  bounded sliding window (same pattern as the earlier DEM/baseline
+  fixes) and writes it straight to a **persistent, resumable** disk
+  cache (`wet_scenes_cache/wetscene_<aoi_id>_<scene_id>.nc`) instead of
+  building a full in-memory `self.wet_scenes_by_aoi` dict -- re-running
+  it skips any scene whose cache file already exists. A per-pixel
+  gap/NaN count is accumulated in the same pass for
+  `generate_number_of_scenes()` to use later, instead of being
+  re-derived from a full in-memory scene dict that no longer exists.
+- **`map_floods()`** now reads one scene at a time from that cache,
+  classifies it, slope-masks it, and writes it to disk -- `self.flood_dict`
+  is now `{scene_id: filepath}`, not arrays.
+- **`merge_floods_by_date()`** and **`generate_number_of_scenes()`**
+  now read from disk (one date's files, or a small pre-computed
+  accumulator) instead of stacking every scene in memory.
+- **Real measured impact** (tile 318, 35 real wet scenes, ~204MB each):
+  peak memory per stage is now **839MB / 1059MB / 1939MB / 153MB**
+  across the four stages -- flat regardless of scene count, versus an
+  estimated **~7.1GB** the old architecture would have needed just to
+  hold all 35 raw scenes at once (before even adding the classified
+  output it also held simultaneously).
+- **`map_floods()` can still be safely re-run with different
+  `vv_thd`/`vh_thd`/`rel_slope_thd` values** without re-triggering
+  `prepare_wet_scenes()`'s read/reproject work -- it just re-reads the
+  same cached scenes and overwrites its own output. Verified explicitly
+  with a call-count spy (no re-reprojection across two `map_floods()`
+  calls with very different thresholds).
+- Verified bit-identical (not just "runs without crashing") against
+  the old in-memory computation for per-scene classification,
+  merge-by-date max-combine, and the gap count, on a synthetic
+  multi-scene, multi-date case.
+
+**Breaking change**: `map_floods()`'s `export_raster` parameter has
+been **removed** -- every scene's classified raster is now always
+written to disk (there's no longer an in-memory result to keep around
+if it weren't, since `merge_floods_by_date()`/`generate_number_of_scenes()`
+now read from disk too). **If your own script calls `map_floods(...,
+export_raster=False)` or `export_raster=True`, remove that argument --
+passing it now raises `TypeError`.** `merge_floods_by_date()`'s and
+`generate_number_of_scenes()`'s own `export_raster` parameters are
+unaffected.
+
+Docs (`quartodocs/examples.qmd`) updated to document the new
+`wet_scenes_cache/` directory and its resumability, the map_floods()
+re-run behavior, and this breaking change -- not just the CHANGELOG.
+
 ## 0.1.0a17
 
 New opt-in flag; **default behavior is unchanged**.

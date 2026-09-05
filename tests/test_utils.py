@@ -118,6 +118,67 @@ class TestFloodData3DStack:
         assert stack.shape == (2, 1, 2)
 
 
+class TestCombineFloodDatesFromPaths:
+    """
+    combine_flood_dates_from_paths()/flood_data_3dstack_from_paths() are
+    the disk-based, memory-bounded counterparts merge_floods_by_date()
+    now uses against map_floods()'s exported files, grouping by the
+    original scene_id (not by re-parsing the date out of the exported
+    filename, which real map_floods() filenames get wrong -- see the
+    function's own docstring) -- these confirm the result matches
+    combine_flood_dates()'s in-memory dict-based result exactly.
+    """
+
+    def _write(self, tmp_path, name, array):
+        path = tmp_path / name
+        utils.export_xarray(xr.DataArray(array.astype('float64'), dims=('y', 'x')), str(path))
+        return str(path)
+
+    def test_matches_in_memory_combine_flood_dates(self, tmp_path):
+        a = np.array([[0, 1], [3, 0]])
+        b = np.array([[3, 0], [0, 0]])
+        c = np.array([[2, 2], [2, 2]])
+
+        # two scenes share a date (same-day multi-track), one is a
+        # different date -- exact scene_id shape doesn't matter beyond
+        # what _extract_date_token can find a date in.
+        scene_id_to_path = {
+            'OPERA_PASS_20240115': self._write(tmp_path, 'a.tif', a),
+            'OPERA_PASS_20240115_dup': self._write(tmp_path, 'b.tif', b),
+            'OPERA_PASS_20240120': self._write(tmp_path, 'c.tif', c),
+        }
+
+        in_memory_result = utils.combine_flood_dates(
+            {'OPERA_PASS_20240115': xr.DataArray(a), 'OPERA_PASS_20240115_dup': xr.DataArray(b),
+             'OPERA_PASS_20240120': xr.DataArray(c)},
+            date_index=-5,
+        )
+        from_paths_result = utils.combine_flood_dates_from_paths(scene_id_to_path, date_index=-5)
+
+        assert set(from_paths_result.keys()) == set(in_memory_result.keys())
+        for date in in_memory_result:
+            np.testing.assert_array_equal(from_paths_result[date], in_memory_result[date])
+
+    def test_flood_data_3dstack_from_paths_matches_in_memory_stack(self, tmp_path):
+        a = np.array([[1, 1]])
+        b = np.array([[0, 0]])
+        scene_id_to_path = {
+            'OPERA_PASS_20240120': self._write(tmp_path, 'a.tif', a),
+            'OPERA_PASS_20240115': self._write(tmp_path, 'b.tif', b),
+        }
+
+        dates_in_memory, stack_in_memory = utils.flood_data_3dstack(
+            {'OPERA_PASS_20240120': xr.DataArray(a), 'OPERA_PASS_20240115': xr.DataArray(b)},
+            date_index=-5,
+        )
+        dates_from_paths, stack_from_paths = utils.flood_data_3dstack_from_paths(
+            scene_id_to_path, date_index=-5,
+        )
+
+        assert dates_from_paths == dates_in_memory
+        np.testing.assert_array_equal(stack_from_paths, stack_in_memory)
+
+
 class TestDefaultMaxWorkers:
     def test_never_returns_less_than_one(self, monkeypatch):
         monkeypatch.setenv("SLURM_CPUS_PER_TASK", "1")

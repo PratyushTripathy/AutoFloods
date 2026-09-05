@@ -44,10 +44,10 @@ fm.prepare_slope(dem_overview=0, buffer=500)
 print(f'[{AOI_ID}] slope computed', flush=True)
 
 fm.prepare_wet_scenes(overview_level=0, max_workers=1)
-print(f'[{AOI_ID}] wet scenes: {sum(len(v) for v in fm.wet_scenes_by_aoi.values())}', flush=True)
+print(f'[{AOI_ID}] wet scenes: {sum(len(v) for v in fm.wet_scene_paths.values())}', flush=True)
 
 fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20,
-              export_raster=False, export_vector=False, export_maps=False)
+              export_vector=False, export_maps=False)
 fm.merge_floods_by_date(export_raster=True)
 fm.generate_number_of_scenes(export_raster=True)
 fm.monthly_sum()

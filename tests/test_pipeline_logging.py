@@ -199,29 +199,37 @@ class TestMapFloods:
     def test_logs_flood_maps_generated_with_correct_pixel_count(self, tmp_path, caplog):
         fm = _make_flood_mapper(tmp_path)
         fm.mean_std_by_aoi = {TILE_ID: MagicMock()}
-        fm.wet_scenes_by_aoi = {TILE_ID: {'scene_a': MagicMock()}}
 
-        classified = xr.DataArray(np.array([[3, 3], [0, 1]]))
+        wet_scene_path = tmp_path / 'wetscene_318_scene_a.nc'
+        xr.DataArray(
+            np.zeros((2, 2, 2)), dims=('band', 'y', 'x'), coords={'band': ['vv_ds', 'vh_ds']},
+        ).to_netcdf(wet_scene_path)
+        fm.wet_scene_paths = {TILE_ID: {'scene_a': str(wet_scene_path)}}
+
+        classified = xr.DataArray(
+            np.array([[3, 3], [0, 1]]), dims=('y', 'x'), coords={'y': [1, 0], 'x': [0, 1]},
+        )
         fm.detector = MagicMock()
         fm.detector.requires_slope_mask = False
         fm.detector.detect.return_value = classified
 
         with caplog.at_level(logging.INFO, logger='autofloods'):
-            fm.map_floods(export_raster=False, export_vector=False, export_maps=False)
+            fm.map_floods(export_vector=False, export_maps=False)
 
         assert 'Flood maps generated for 1 AOI(s), 1 scene(s): 2 high-confidence flooded pixels' in caplog.text
 
 
 class TestMergeFloodsByDate:
-    def test_logs_dates_merged(self, tmp_path, monkeypatch, caplog):
+    def test_logs_dates_merged(self, tmp_path, caplog):
         fm = _make_flood_mapper(tmp_path)
         fm.mean_std_by_aoi = {TILE_ID: _synthetic_grid_array(size=5).squeeze('band', drop=True)}
-        fm.flood_dict = {TILE_ID: {'scene_a': MagicMock()}}
 
-        monkeypatch.setattr(
-            utils, 'flood_data_3dstack',
-            lambda flood_data, date_index=-5: (['20240701', '20240702'], np.zeros((2, 5, 5))),
-        )
+        classified = _synthetic_grid_array(size=5).squeeze('band', drop=True)
+        path_a = tmp_path / 'floodextent_scene_20240701_a.tif'
+        path_b = tmp_path / 'floodextent_scene_20240702_b.tif'
+        utils.export_xarray(classified, str(path_a))
+        utils.export_xarray(classified, str(path_b))
+        fm.flood_dict = {TILE_ID: {'scene_20240701_a': str(path_a), 'scene_20240702_b': str(path_b)}}
 
         with caplog.at_level(logging.INFO, logger='autofloods'):
             fm.merge_floods_by_date(export_raster=False)
@@ -233,13 +241,8 @@ class TestGenerateNumberOfScenes:
     def test_logs_scene_count_computed(self, tmp_path, caplog):
         fm = _make_flood_mapper(tmp_path)
         fm.mean_std_by_aoi = {TILE_ID: _synthetic_grid_array(size=3).squeeze('band', drop=True).expand_dims(band=[0])}
-
-        scene = xr.DataArray(
-            np.array([[[1.0, np.nan, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
-                      [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]]),
-            dims=('band', 'y', 'x'),
-        )
-        fm.wet_scenes_by_aoi = {TILE_ID: {'scene_a': scene}}
+        fm.wet_scene_paths = {TILE_ID: {'scene_a': 'dummy_path.nc'}}
+        fm._wet_scene_gap_count_by_aoi = {TILE_ID: np.array([[0, 1, 0], [0, 0, 0], [0, 0, 0]])}
 
         with caplog.at_level(logging.INFO, logger='autofloods'):
             fm.generate_number_of_scenes(export_raster=False)

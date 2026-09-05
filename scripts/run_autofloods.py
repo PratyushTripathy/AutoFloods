@@ -109,13 +109,13 @@ def run_one_aoi(cfg, aoi_id):
 
     fm.prepare_wet_scenes(overview_level=overview_level, max_workers=max_workers,
                            reproject_max_workers=reproject_max_workers)
-    print(f'[{aoi_id}] wet scenes: {sum(len(v) for v in fm.wet_scenes_by_aoi.values())}', flush=True)
+    print(f'[{aoi_id}] wet scenes: {sum(len(v) for v in fm.wet_scene_paths.values())}', flush=True)
 
     fm.map_floods(
         vv_thd=detection_cfg.get('vv_thd', -3),
         vh_thd=detection_cfg.get('vh_thd', -3),
         rel_slope_thd=detection_cfg.get('rel_slope_thd', 20),
-        export_raster=False, export_vector=False, export_maps=False,
+        export_vector=False, export_maps=False,
     )
     fm.merge_floods_by_date(export_raster=True)
     fm.generate_number_of_scenes(export_raster=True)

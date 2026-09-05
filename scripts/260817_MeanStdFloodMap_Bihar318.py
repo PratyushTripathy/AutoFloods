@@ -30,7 +30,7 @@ fm.prepare_slope(dem_overview=0, buffer=500)
 
 fm.prepare_wet_scenes(overview_level=2)
 fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20,
-              export_raster=False, export_vector=False, export_maps=False)
+              export_vector=False, export_maps=False)
 fm.merge_floods_by_date(export_raster=False)
 
 vv_mean = fm.mean_std_by_aoi[AOI_ID].sel(band='vv_mean')
