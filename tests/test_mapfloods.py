@@ -24,6 +24,7 @@ case this file is ever collected before that import happens).
 
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 import numpy as np
 import pytest
@@ -117,3 +118,48 @@ class TestFloodImages:
 
         assert outfile.exists()
         assert outfile.stat().st_size > 0
+
+    def test_no_crs_falls_back_to_native_coordinates(self, tmp_path, caplog):
+        # flood_xarray here has no CRS (matches the no-CRS array above) --
+        # to_wgs84=True (the default) must not raise, just warn and plot
+        # in whatever coordinates it already has.
+        flood_xarray = self._make_flood_xarray()
+        outfile = tmp_path / "flood_map.png"
+
+        mapfloods.flood_images(flood_xarray, str(outfile))
+
+        assert outfile.exists()
+        assert "no CRS" in caplog.text
+
+    def test_reprojects_to_wgs84_when_crs_present(self, tmp_path):
+        # a real UTM-45N raster (arbitrary tile-sized coords) should get
+        # reprojected to EPSG:4326 -- resulting x/y (lon/lat) must land
+        # in plausible geographic ranges, not raw UTM easting/northing.
+        data = np.array([[0, 1, 3], [3, 0, 1], [0, 0, 3]], dtype="uint8")
+        flood_xarray = xr.DataArray(
+            data, dims=("y", "x"),
+            coords={"y": [3300000.0, 3299970.0, 3299940.0], "x": [500000.0, 500030.0, 500060.0]},
+        ).rio.write_crs("EPSG:32645")
+        outfile = tmp_path / "flood_map.png"
+
+        mapfloods.flood_images(flood_xarray, str(outfile))
+
+        assert outfile.exists()
+        assert outfile.stat().st_size > 0
+
+    def test_title_and_label_fontsize_applied(self, tmp_path):
+        flood_xarray = self._make_flood_xarray()
+        outfile = tmp_path / "flood_map.png"
+
+        captured = {}
+        real_set_title = plt.Axes.set_title
+
+        def spy_set_title(self, *args, **kwargs):
+            captured["title_kwargs"] = kwargs
+            return real_set_title(self, *args, **kwargs)
+
+        import unittest.mock as mock
+        with mock.patch.object(plt.Axes, "set_title", spy_set_title):
+            mapfloods.flood_images(flood_xarray, str(outfile), title_fontsize=22, label_fontsize=16)
+
+        assert captured["title_kwargs"]["fontsize"] == 22
