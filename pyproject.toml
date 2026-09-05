@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autofloods"
-version = "0.1.0a21"
+version = "0.1.0a22"
 description = "Automated flood mapping at scale from Sentinel-1 SAR imagery"
 readme = "PYPI_README.md"
 license = { text = "MIT" }

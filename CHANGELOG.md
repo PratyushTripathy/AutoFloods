@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.1.0a22
+
+**Added `autofloods.visualize`**, a new module of quick-look
+matplotlib plots for pipeline outputs -- useful for a fast sanity
+check in a notebook without opening each raster in GIS software. All
+four functions read directly from `output_dir` on disk (reconstructing
+file paths deterministically from the `flood_mapper` instance's own
+constructor attributes), not from in-memory pipeline state -- they
+work against a completed run's output in a **fresh session**, as long
+as `fm` is constructed with the same
+`grid_shapefile`/`dry_years`/`wet_duration`/`output_dir`/`slope_dir`
+the original run used (the same assumption
+`flood_mapper.is_fully_processed` already makes). Each function
+returns a `matplotlib.figure.Figure` rather than displaying it, so it
+renders normally as a notebook cell's last expression or via
+`fig.savefig(...)`.
+
+- **`plot_baseline(fm, aoi_id)`** -- 2x2 grid of the dry-season Z-score
+  baseline (VV mean, VV std, VH mean, VH std). Mean panels are
+  converted to dB for display (the on-disk baseline is linear power --
+  dB gives SAR backscatter's standard, visually sane dynamic range)
+  and share one percentile-clipped color scale; std panels stay in
+  native linear units with their own separate scale.
+- **`plot_terrain(fm, aoi_id)`** -- terrain slope (degrees). Slope-only,
+  not DEM+slope side by side: the DEM mosaic `prepare_slope()` uses is
+  transient (read once to derive slope, then discarded) -- nothing in
+  the pipeline caches a DEM file to disk, so there is currently no DEM
+  for this function to read in a fresh session.
+- **`plot_scenes_and_floods(fm, aoi_id, max_scenes=None, target_cols=6)`**
+  -- the most complex layout: one column per wet-season scene, an RGB
+  composite (R=VV, G=VH, B=the VV/VH log-ratio, all dB, percentile-
+  stretched) directly above that scene's flood classification, columns
+  wrapping into additional row-pairs beyond `target_cols` (e.g. 11
+  scenes -> two row-pairs, 6 then 5, with unused trailing axes turned
+  off rather than left blank). One fixed color scale and shared legend
+  for the flood-classification panels across the whole figure, so
+  panels are directly comparable. `max_scenes` caps how many
+  (chronologically earliest) scenes are rendered; the figure title
+  reports how many were shown and, if any were skipped (cap, or a
+  scene with no matching flood raster on disk yet), how many and why.
+- **`plot_flood_map(fm, aoi_id, month=None)`** -- `monthly_sum()`'s
+  per-month flood-day-count output; a single month or every available
+  month as a subplot grid, sharing one discrete colorbar so months are
+  directly comparable. Nodata (255) is masked and rendered gray, kept
+  out of the count colorscale entirely.
+
+Also documented the classified-raster pixel-value encoding
+(0=not flooded, 1=VH-only, 2=VV-only, 3=high-confidence flood,
+NaN=data gap) prominently in `examples.qmd`'s Output section -- this
+was previously only in the `FloodDetector`/`ZScoreDetector` docstrings,
+not anywhere a user browsing the docs would see it directly.
+
+Added to the API reference (`quartodocs/_quarto.yml`) and a new
+"Visualizing results" section in `examples.qmd` with a real example
+per function, including a detailed walkthrough of
+`plot_scenes_and_floods`'s layout. 14 new tests in
+`tests/test_visualize.py`, including parametrized column-wrap cases
+for scene counts that do and don't evenly divide `target_cols`.
+
+Full test suite: 194 passing.
+
 ## 0.1.0a21
 
 Two independent changes in this release: a correctness fix and a UX

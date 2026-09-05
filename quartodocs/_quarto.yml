@@ -85,3 +85,10 @@ quartodoc:
         - utils.gpd_to_json
         - utils.decibel_to_linear
         - utils.linear_to_decibel
+    - title: "Visualization"
+      desc: "Quick-look matplotlib plots of pipeline outputs, read from disk."
+      contents:
+        - visualize.plot_baseline
+        - visualize.plot_terrain
+        - visualize.plot_scenes_and_floods
+        - visualize.plot_flood_map

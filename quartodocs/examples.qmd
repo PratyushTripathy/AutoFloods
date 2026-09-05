@@ -218,3 +218,81 @@ For each AOI, under `output_dir/tile<id>/`:
 All GeoTIFF output is written as Cloud Optimized GeoTIFF (tiled,
 DEFLATE-compressed, with overviews); the wet-season scene cache is
 plain NetCDF.
+
+### Pixel-value encoding
+
+Every classified flood raster (`floodextent_*.tif` and
+`floodextentstacked_*.tif`) uses the same encoding, from
+`FloodDetector.detect`/`ZScoreDetector.detect`:
+
+| Value | Meaning |
+|---|---|
+| `0` | Not flooded (also used for slope-masked-out pixels -- steep terrain is forced to `0`, not `NaN`) |
+| `1` | VH band only flagged anomalous (low-confidence flood) |
+| `2` | VV band only flagged anomalous (low-confidence flood) |
+| `3` | Both VV and VH flagged anomalous (high-confidence flood) |
+| `NaN` | Data gap -- a missing/invalid observation in either band at that pixel, not classified at all |
+
+`monthlyadded_*.tif` (the `monthly_sum()` output) is different: each
+pixel is a per-month **count** of how many observed dates that pixel
+was high-confidence flooded (class `3`) -- not the 0-3 encoding above.
+Nodata there is `255` (a pixel with zero valid observations all
+month), not `NaN`. `generate_number_of_scenes(export_raster=True)`'s
+`floodvalidscenecount_*.tif` gives the per-pixel denominator (valid,
+non-gap observation count) needed to turn that count into a fraction.
+
+## Visualizing results
+
+`autofloods.visualize` has quick-look matplotlib plots of the outputs
+above -- useful for a fast sanity check in a notebook without opening
+each raster in GIS software. Every function reads directly from
+`output_dir` on disk (not the `flood_mapper` instance's in-memory
+state), so they work against a completed run's output in a **fresh
+session** -- just construct a `flood_mapper` with the same
+`grid_shapefile`/`dry_years`/`wet_duration`/`output_dir`/`slope_dir`
+the original run used (the same assumption
+`flood_mapper.is_fully_processed` already makes), no pipeline methods
+need to be called first. Each function returns a `matplotlib.figure.Figure`
+(nothing is displayed automatically) -- return it as a notebook cell's
+last expression, or call `fig.savefig(...)`.
+
+```python
+from autofloods import flood_mapper
+from autofloods.sources import OPERASource
+from autofloods import visualize
+
+fm = flood_mapper(
+    grid_shapefile='resources/india_utm_fishnet_buffer.gpkg',
+    grid_id_list=[321],
+    dry_years=[2024, 2024],
+    slope_dir='resources/slope/',
+    wet_duration=['2024/07', '2024/10'],
+    source=OPERASource(),
+    output_dir='output/my_run',
+)
+
+visualize.plot_baseline(fm, 321)        # dry-season VV/VH mean+std, 2x2 grid
+visualize.plot_terrain(fm, 321)         # terrain slope (degrees)
+visualize.plot_scenes_and_floods(fm, 321, max_scenes=20)  # RGB scenes over their flood classifications
+visualize.plot_flood_map(fm, 321)       # every month's flood-day count, or month='202408' for one
+```
+
+`plot_scenes_and_floods()` is the most complex layout, so here's what
+it actually produces: each wet-season scene gets one column, with an
+RGB composite (R=VV, G=VH, B=the VV/VH log-ratio, all converted to dB
+and percentile-stretched for display) directly above that same scene's
+flood classification, and the scene's date as that column's title
+(shown once, above the RGB panel only). Up to 6 scenes share one row;
+an AOI with more than 6 scenes wraps into additional row-pairs
+underneath -- e.g. 11 scenes renders as two row-pairs, the first with 6
+columns fully populated (RGB row + flood row), the second with only 5
+of its 6 columns populated and the unused 6th column blank in both
+rows. The flood-classification panels all share one fixed color scale
+(not-flooded / VH-only / VV-only / high-confidence flood / masked-no-data)
+with a single legend below the whole figure, so panels are directly
+comparable at a glance -- flip between two dates and a color change
+means a real change in flood state, not a rescaled color map. Pass
+`max_scenes` to cap how many (chronologically earliest) scenes are
+rendered; the figure's title reports how many were shown and, if any
+were skipped (either by the cap or because that scene has no matching
+flood raster on disk yet), how many and why.
