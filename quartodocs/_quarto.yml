@@ -68,7 +68,7 @@ quartodoc:
         - preprocessing.reproject_clip_stac
         - preprocessing.stack_images
         - preprocessing.clip_xarray_using_id
-        - preprocessing.smoothen_slope
+        - preprocessing.compute_slope
     - title: "Postprocessing"
       desc: "Polygonization and monthly aggregation."
       contents:
