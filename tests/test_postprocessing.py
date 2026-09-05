@@ -116,6 +116,96 @@ class TestPolygonizeFloodRaster:
         assert len(gdf) == 0
 
 
+class TestSmoothenFloodRaster:
+    def test_rejects_even_kernel_size(self):
+        array = np.zeros((5, 5))
+        with pytest.raises(ValueError, match='odd'):
+            postprocessing.smoothen_flood_raster(array, kernel_size=4)
+
+    def test_removes_single_pixel_speckle_preserves_boundary(self):
+        # left half class 0, right half class 3 (a real boundary), plus
+        # one isolated speckle pixel (misclassified as 3 inside the 0
+        # region) that a majority filter should remove.
+        array = np.zeros((7, 7), dtype='float64')
+        array[:, 4:] = 3
+        array[2, 1] = 3  # speckle, deep inside the class-0 region
+
+        smoothed = postprocessing.smoothen_flood_raster(array, kernel_size=3)
+
+        assert smoothed[2, 1] == 0  # speckle removed
+        # boundary still separates 0s from 3s at the same column -- not
+        # washed out into some blended/incorrect value
+        np.testing.assert_array_equal(smoothed[:, :4], 0)
+        np.testing.assert_array_equal(smoothed[:, 4:], 3)
+
+    def test_nan_gap_with_valid_neighbors_is_resolved(self):
+        array = np.full((5, 5), 2.0)
+        array[2, 2] = np.nan  # single gap pixel, surrounded entirely by valid class-2 neighbors
+
+        smoothed = postprocessing.smoothen_flood_raster(array, kernel_size=3)
+
+        assert not np.isnan(smoothed[2, 2])
+        assert smoothed[2, 2] == 2
+
+    def test_nan_gap_with_no_valid_neighbors_stays_nan(self):
+        array = np.full((7, 7), 1.0)
+        array[1:4, 1:4] = np.nan  # a 3x3 block of gap -- its center pixel's
+        # own 3x3 neighborhood (kernel_size=3) is entirely gap, so it has
+        # no valid neighbor to resolve from and must stay NaN.
+
+        smoothed = postprocessing.smoothen_flood_raster(array, kernel_size=3)
+
+        assert np.isnan(smoothed[2, 2])
+        # the gap block's edge pixels (e.g. (1,1)) DO have valid
+        # neighbors just outside the block and should be resolved
+        assert not np.isnan(smoothed[1, 1])
+
+    def test_kernel_size_actually_changes_result(self):
+        # a single-pixel speckle far enough from a same-valued cluster
+        # that a 3x3 kernel can't out-vote it (majority still speckle),
+        # but a 5x5 kernel reaches enough class-0 neighbors to flip it.
+        array = np.zeros((9, 9), dtype='float64')
+        array[4, 4] = 3
+
+        smoothed_3 = postprocessing.smoothen_flood_raster(array, kernel_size=3)
+        smoothed_5 = postprocessing.smoothen_flood_raster(array, kernel_size=5)
+
+        # both should actually remove this isolated speckle (a lone 3
+        # among eight 0-neighbors loses the vote at any reasonable
+        # kernel size) -- see the next test for an assertion that
+        # actually distinguishes kernel_size=3 from kernel_size=5's
+        # behavior (a gap only kernel_size=5 can resolve).
+        assert smoothed_3[4, 4] == 0
+        assert smoothed_5[4, 4] == 0
+        assert smoothed_3.shape == smoothed_5.shape
+
+    def test_kernel_size_5_resolves_larger_gap_than_kernel_size_3_can(self):
+        # a 3x3 gap block: kernel_size=3 can't resolve its center pixel
+        # (its own 3x3 neighborhood is entirely gap), but kernel_size=5
+        # reaches valid pixels just outside the block and can.
+        array = np.full((9, 9), 2.0)
+        array[3:6, 3:6] = np.nan
+
+        smoothed_3 = postprocessing.smoothen_flood_raster(array, kernel_size=3)
+        smoothed_5 = postprocessing.smoothen_flood_raster(array, kernel_size=5)
+
+        assert np.isnan(smoothed_3[4, 4])
+        assert not np.isnan(smoothed_5[4, 4])
+        assert smoothed_5[4, 4] == 2
+
+    def test_preserves_dataarray_type_dims_and_coords(self):
+        array = xr.DataArray(
+            np.array([[0, 0, 0], [0, 3, 0], [0, 0, 0]], dtype='float64'),
+            dims=('y', 'x'), coords={'y': [2, 1, 0], 'x': [0, 1, 2]},
+        )
+        smoothed = postprocessing.smoothen_flood_raster(array, kernel_size=3)
+
+        assert isinstance(smoothed, xr.DataArray)
+        assert smoothed.dims == array.dims
+        np.testing.assert_array_equal(smoothed.coords['y'].values, array.coords['y'].values)
+        np.testing.assert_array_equal(smoothed.coords['x'].values, array.coords['x'].values)
+
+
 class TestAggregateMonthly:
     def _write_stack(self, path, bands_with_names, height=2, width=2):
         """

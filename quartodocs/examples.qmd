@@ -113,8 +113,23 @@ fm.prepare_wet_scenes(overview_level=None, max_workers=6)  # search, read, repro
 fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20,
               export_vector=False, export_maps=False)  # classify each scene against the baseline
 fm.merge_floods_by_date(export_raster=True)       # collapse per-scene results into one band per date
-fm.generate_number_of_scenes(export_raster=True)  # per-pixel count of scenes with data gaps
+fm.generate_number_of_scenes(export_raster=True)  # per-pixel count of VALID (non-gap) observations
 fm.monthly_sum()                      # aggregate per-date results into per-month flood-day counts
+```
+
+**Optional: majority-filter (mode) smoothing.** `map_floods(smooth=True,
+smooth_kernel_size=3)` runs each scene's classified raster through
+`postprocessing.smoothen_flood_raster()` right before export -- a
+majority/mode filter (not a mean/Gaussian filter, which wouldn't make
+sense for discrete class values) that removes isolated single-pixel
+speckle misclassifications while preserving real class boundaries.
+NaN data-gap pixels are resolved from valid neighbors where possible,
+and left NaN only where a gap pixel's entire neighborhood is also gap.
+Off by default -- no behavior change unless you opt in:
+
+```python
+fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20,
+              smooth=True, smooth_kernel_size=3)
 ```
 
 `prepare_wet_scenes()` reprojects each wet-season scene once and caches

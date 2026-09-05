@@ -1032,7 +1032,8 @@ class flood_mapper():
             f'{n_scenes} scene(s) total'
         )
 
-    def map_floods(self, vv_thd=-3, vh_thd=-3, rel_slope_thd=20, export_vector=False, export_maps=False):
+    def map_floods(self, vv_thd=-3, vh_thd=-3, rel_slope_thd=20, export_vector=False, export_maps=False,
+                   smooth=False, smooth_kernel_size=3):
         """
         Classify every wet-season scene against its AOI's baseline
         (self.detector.detect()), apply the slope mask if the detector
@@ -1042,6 +1043,21 @@ class flood_mapper():
         file paths, not arrays (0/1/2/3 encoding -- see
         detectors.ZScoreDetector -- baked into the exported raster's
         pixel values).
+
+        smooth=True (off by default) applies
+        postprocessing.smoothen_flood_raster() -- a majority/mode
+        filter, the correct choice for this discrete categorical class
+        data (not a mean/Gaussian filter) -- to each scene's classified
+        raster right after slope-masking and before export, removing
+        isolated single-pixel speckle misclassifications while
+        preserving real class boundaries and NaN data gaps (resolved
+        from valid neighbors where possible, left NaN where a gap's
+        entire neighborhood is also gap -- see that function's
+        docstring). smooth_kernel_size (must be a positive odd integer,
+        default 3) is passed through as its kernel_size. The logged
+        "high-confidence flooded pixels" count reflects the POST-
+        smoothing raster when smooth=True, since that's what's actually
+        written to disk.
 
         Reads one wet scene at a time from prepare_wet_scenes()'s
         persistent disk cache (self.wet_scene_paths), classifies it,
@@ -1139,6 +1155,11 @@ class flood_mapper():
 
                 if slope_xarray is not None:
                     classified = classified.where(slope_xarray.values[0, :, :] < rel_slope_thd, 0)
+
+                if smooth:
+                    classified = autofloods.postprocessing.smoothen_flood_raster(
+                        classified, kernel_size=smooth_kernel_size
+                    )
 
                 n_scenes += 1
                 n_flooded += int((classified == 3).sum())

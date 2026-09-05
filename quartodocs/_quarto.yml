@@ -73,6 +73,7 @@ quartodoc:
       desc: "Polygonization and monthly aggregation."
       contents:
         - postprocessing.polygonize_flood_raster
+        - postprocessing.smoothen_flood_raster
         - postprocessing.flood_duration_count
         - postprocessing.aggregate_monthly
     - title: "Utilities"

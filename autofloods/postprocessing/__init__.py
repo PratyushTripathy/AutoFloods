@@ -6,6 +6,9 @@ import rasterio
 from shapely.geometry import shape
 import geopandas as gpd
 import numpy as np
+import xarray as xr
+from skimage.filters import rank
+from skimage.morphology import footprint_rectangle
 
 # define a function to polygonize the flood raster
 def polygonize_flood_raster(flood_data):
@@ -65,6 +68,75 @@ def polygonize_flood_raster(flood_data):
     #gdf['geometry'] = gdf['geometry'].scale(xfact=1, yfact=-1, origin=center_top_point)
 
     return gdf
+
+# define a function to majority-filter (mode-smooth) a classified flood raster
+def smoothen_flood_raster(flood_array, kernel_size=3):
+    """
+    Majority-vote (mode) smoothing of a classified flood raster (the
+    0/1/2/3/NaN encoding -- see detectors.FloodDetector) via
+    skimage.filters.rank.majority -- the correct filter for discrete
+    CATEGORICAL class data (unlike a mean/Gaussian filter, which would
+    average class labels together into meaningless values). Removes
+    isolated single-pixel speckle misclassifications while preserving
+    real class boundaries. Called from map_floods() when smooth=True
+    (off by default).
+
+    NaN (data-gap) pixels are excluded from every neighbor's vote via
+    rank.majority()'s `mask=` parameter -- verified directly (not just
+    from docs) that a masked-out pixel's own value never influences a
+    neighbor's result. A masked pixel still gets a computed output
+    value from its VALID neighbors' votes, though -- so a NaN gap
+    pixel is resolved (filled in) via majority vote wherever it has at
+    least one valid neighbor within `kernel_size`. Only where a gap
+    pixel's ENTIRE neighborhood is also gap (e.g. deep inside a large
+    contiguous data gap) does it stay NaN: skimage's own behavior for
+    a fully-masked neighborhood silently falls back to 0, which would
+    misread as a real "not flooded" classification, so that fallback
+    is explicitly detected (via a second rank.sum() pass counting
+    valid neighbors) and overridden back to NaN rather than trusted.
+
+    rank.majority() requires uint8/uint16 input (rank filters don't
+    accept float/NaN) -- NaN positions are filled with a 0 placeholder
+    before conversion, which is safe precisely because mask= excludes
+    them from ever being counted in a neighbor's vote.
+
+    Parameters
+    ----------
+    flood_array : xarray.DataArray or numpy.ndarray
+        2D classified raster (values 0/1/2/3, NaN for gaps).
+    kernel_size : int
+        Side length of the square neighborhood (must be a positive odd
+        integer, e.g. 3 for a 3x3 window, 5 for 5x5). Default 3.
+
+    Returns
+    -------
+    Same type as `flood_array` (DataArray keeps its dims/coords/attrs).
+    """
+    if kernel_size < 1 or kernel_size % 2 == 0:
+        raise ValueError(f'kernel_size must be a positive odd integer, got {kernel_size!r}')
+
+    is_dataarray = isinstance(flood_array, xr.DataArray)
+    values = flood_array.values if is_dataarray else flood_array
+
+    valid_mask = ~np.isnan(values)
+    filled = np.where(valid_mask, values, 0).astype(np.uint8)
+    valid_mask_u8 = valid_mask.astype(np.uint8)
+    footprint = footprint_rectangle((kernel_size, kernel_size))
+
+    smoothed = rank.majority(filled, footprint, mask=valid_mask_u8).astype(np.float64)
+
+    # a gap pixel with zero valid neighbors in the window has nothing
+    # to be resolved from -- force it back to NaN rather than trusting
+    # skimage's fallback-to-0 for a fully-masked neighborhood. An
+    # originally-valid pixel always has at least itself (count >= 1),
+    # so this can only ever affect originally-NaN pixels.
+    valid_neighbor_count = rank.sum(valid_mask_u8, footprint)
+    smoothed[(~valid_mask) & (valid_neighbor_count == 0)] = np.nan
+
+    if is_dataarray:
+        return xr.DataArray(smoothed, dims=flood_array.dims, coords=flood_array.coords, attrs=flood_array.attrs)
+    return smoothed
+
 
 def flood_duration_count(stacked_flood_data):
     """

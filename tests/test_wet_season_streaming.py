@@ -331,6 +331,68 @@ class TestValidCountNormalizesMonthlySum:
         # docstring.
 
 
+class TestMapFloodsSmoothing:
+    def test_smooth_false_is_default_and_unchanged(self, tmp_path, monkeypatch):
+        fm = _make_flood_mapper(tmp_path)
+        fm.mean_std_by_aoi = {TILE_ID: _make_baseline()}
+        _wire_wet_scene_mocks(fm, monkeypatch)
+        _write_dummy_slope(fm)
+
+        fm.prepare_wet_scenes()
+        fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, export_vector=False, export_maps=False)
+
+        baseline = fm.mean_std_by_aoi[TILE_ID]
+        for scene_id in SCENE_DEFS:
+            old_classified = fm.detector.detect(baseline, _old_style_wet_scene(scene_id))
+            new_classified = xr.load_dataarray(fm.flood_dict[TILE_ID][scene_id], engine='rasterio').squeeze('band', drop=True)
+            np.testing.assert_array_equal(new_classified.values, old_classified.values)
+
+    def test_smooth_true_applies_smoothing_and_updates_log_count(self, tmp_path, monkeypatch, caplog):
+        import logging
+        fm = _make_flood_mapper(tmp_path)
+        fm.mean_std_by_aoi = {TILE_ID: _make_baseline()}
+        _wire_wet_scene_mocks(fm, monkeypatch)
+        _write_dummy_slope(fm)
+
+        fm.prepare_wet_scenes()
+        with caplog.at_level(logging.INFO, logger='autofloods'):
+            fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, export_vector=False, export_maps=False, smooth=True, smooth_kernel_size=3)
+
+        # the lone class-3 pixel at (1,0) in the 20240717 scene (3x3
+        # grid, no same-valued neighbors) is exactly the kind of
+        # isolated speckle a majority filter removes.
+        smoothed = xr.load_dataarray(
+            fm.flood_dict[TILE_ID]['S1A_IW_GRDH_1SDV_20240717T000000_20240717T000025_000004_000004_rtc'],
+            engine='rasterio',
+        ).squeeze('band', drop=True)
+        assert smoothed.values[1, 0] == 0
+
+        # the logged count reflects the POST-smoothing raster, i.e. 0
+        # high-confidence flooded pixels once the lone speckle is smoothed away.
+        assert '0 high-confidence flooded pixels' in caplog.text
+
+    def test_smooth_true_differs_from_smooth_false_output(self, tmp_path, monkeypatch):
+        fm = _make_flood_mapper(tmp_path)
+        fm.mean_std_by_aoi = {TILE_ID: _make_baseline()}
+        _wire_wet_scene_mocks(fm, monkeypatch)
+        _write_dummy_slope(fm)
+
+        fm.prepare_wet_scenes()
+        fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, export_vector=False, export_maps=False, smooth=False)
+        unsmoothed = xr.load_dataarray(
+            fm.flood_dict[TILE_ID]['S1A_IW_GRDH_1SDV_20240717T000000_20240717T000025_000004_000004_rtc'],
+            engine='rasterio',
+        ).squeeze('band', drop=True).values.copy()
+
+        fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, export_vector=False, export_maps=False, smooth=True)
+        smoothed = xr.load_dataarray(
+            fm.flood_dict[TILE_ID]['S1A_IW_GRDH_1SDV_20240717T000000_20240717T000025_000004_000004_rtc'],
+            engine='rasterio',
+        ).squeeze('band', drop=True).values
+
+        assert not np.array_equal(unsmoothed, smoothed)
+
+
 class TestMapFloodsExportMapsAndVector:
     """map_floods()'s export_vector=True/export_maps=True paths both
     reload a scene's just-written classified raster from disk via

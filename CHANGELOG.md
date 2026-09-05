@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.1.0a23
+
+Two independent changes in this release.
+
+**Added `postprocessing.smoothen_flood_raster(flood_array, kernel_size=3)`**,
+a majority/mode filter (`skimage.filters.rank.majority`) for the
+classified flood raster's discrete 0/1/2/3/NaN class data -- the
+correct filter choice for categorical data, unlike a mean/Gaussian
+filter, which would average class labels into meaningless values.
+Removes isolated single-pixel speckle misclassifications while
+preserving real class boundaries.
+
+- NaN (data-gap) pixels are excluded from every neighbor's vote via
+  `rank.majority()`'s `mask=` parameter -- verified directly (not just
+  from its docs) that a masked-out pixel's own value never influences
+  a neighbor's result. A gap pixel itself is resolved (filled in) via
+  majority vote of its valid neighbors wherever it has at least one
+  within `kernel_size`; only where its entire neighborhood is also gap
+  does it stay NaN -- `skimage`'s own fallback-to-`0` for a
+  fully-masked neighborhood is explicitly detected (via a second
+  `rank.sum()` pass counting valid neighbors) and overridden back to
+  NaN, since a silent `0` there would misread as a real "not flooded"
+  classification.
+- `kernel_size` must be a positive odd integer (e.g. `3`, `5`); a
+  clear `ValueError` otherwise.
+- Wired into `map_floods()` as new `smooth=False`/`smooth_kernel_size=3`
+  parameters (opt-in, no behavior change unless requested), applied
+  right after slope-masking and before export. The logged
+  "high-confidence flooded pixels" count reflects the post-smoothing
+  raster when `smooth=True`, matching what's actually written to disk.
+- Also fixed a stale code comment in `examples.qmd` left over from the
+  0.1.0a21 fix (`generate_number_of_scenes()`'s comment still said
+  "count of scenes with data gaps" instead of "valid observations").
+
+**Trimmed the PyPI README** (`PYPI_README.md`, PyPI's rendered
+long_description) to just the intro paragraph and a minimal Quickstart
+(authentication note, pre-release install line, and a link to the full
+docs) -- dropped the logo image and the entire "Basic usage" code
+block (which had also drifted out of date, e.g. still showing the
+`export_raster` kwarg removed in 0.1.0a19). Full usage now lives only
+in the docs site (`examples.qmd`), not duplicated (and liable to rot)
+in two places.
+
+Full test suite: 204 passing.
+
 ## 0.1.0a22
 
 **Added `autofloods.visualize`**, a new module of quick-look
