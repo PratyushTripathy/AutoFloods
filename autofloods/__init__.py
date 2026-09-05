@@ -1177,8 +1177,14 @@ class flood_mapper():
                     # squeeze the (band, y, x) shape engine='rasterio' reload
                     # gives back down to (y, x) -- flood_images() expects
                     # exactly 2D, matching what it always got in the old
-                    # in-memory (pre-streaming) architecture.
+                    # in-memory (pre-streaming) architecture. Also borrow
+                    # the CRS from mean_std_by_aoi[id] (same tile/UTM
+                    # zone), same as the export_vector reload above --
+                    # export_xarray() never writes CRS into the file, and
+                    # flood_images() needs a real CRS to reproject to
+                    # WGS84 for lon/lat axes.
                     classified = xr.load_dataarray(flood_path, engine='rasterio').squeeze('band', drop=True)
+                    classified = classified.rio.write_crs(self.mean_std_by_aoi[id].rio.crs)
                     outfile_flood = flood_map_outfile.replace('_id.png', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{"_".join(scene_id.split("_")[4:])}.png')
 
                     mapfloods.flood_images(

@@ -10,8 +10,13 @@ directly -- it is a generic visualization helper for any classified
 """
 
 import os
+import logging
 import xarray as xr
+import rioxarray  # noqa: F401 -- registers the .rio accessor used by flood_images()
 import matplotlib.pyplot as plt
+from rasterio.enums import Resampling
+
+logger = logging.getLogger('autofloods')
 
 # switch off displaying maps
 plt.ioff()
@@ -90,13 +95,31 @@ def map_floods(mean_std_by_aoi, wet_scenes_by_aoi, slope_path, vv_thd, vh_thd, r
 
 
 # define a function to export flood maps as images
-def flood_images(flood_xarray, outfile_flood):
+def flood_images(flood_xarray, outfile_flood, title_fontsize=20, label_fontsize=14, to_wgs84=True):
     """
     Save a quick-look PNG (Blues colormap, no colorbar, titled with the
     output filename's stem) of a classified flood raster -- for visual
     QA, not a publication figure. Called from flood_mapper.map_floods()
     when export_maps=True (off by default).
+
+    When `to_wgs84` is True (default) and `flood_xarray` carries a CRS
+    (flood_mapper.map_floods() writes one on before calling this), the
+    raster is reprojected to EPSG:4326 (nearest resampling -- this is
+    categorical 0/1/2/3 class data, not something to interpolate) so the
+    axes read as real longitude/latitude instead of the native UTM
+    easting/northing. Falls back to plotting in whatever coordinates
+    `flood_xarray` already has (with a warning) if it has no CRS -- e.g.
+    a plain synthetic array passed directly, not through map_floods().
     """
+    if to_wgs84:
+        if flood_xarray.rio.crs is not None:
+            flood_xarray = flood_xarray.rio.reproject('EPSG:4326', resampling=Resampling.nearest)
+        else:
+            logger.warning(
+                'flood_images(): flood_xarray has no CRS, plotting in its native '
+                'coordinates instead of reprojecting to WGS84.'
+            )
+
     x_min = flood_xarray.x.min()
     y_min = flood_xarray.y.min()
     x_max = flood_xarray.x.max()
@@ -111,7 +134,10 @@ def flood_images(flood_xarray, outfile_flood):
 
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
-    ax.set_title(os.path.split(os.path.splitext(outfile_flood)[0])[-1])
+    ax.set_title(os.path.split(os.path.splitext(outfile_flood)[0])[-1], fontsize=title_fontsize)
+    ax.set_xlabel('Longitude' if flood_xarray.rio.crs == 'EPSG:4326' else ax.get_xlabel(), fontsize=label_fontsize)
+    ax.set_ylabel('Latitude' if flood_xarray.rio.crs == 'EPSG:4326' else ax.get_ylabel(), fontsize=label_fontsize)
+    ax.tick_params(axis='both', labelsize=label_fontsize)
 
     plt.savefig(outfile_flood, bbox_inches='tight', dpi=100)
 
