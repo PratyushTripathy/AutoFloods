@@ -6,11 +6,21 @@ import logging
 import os
 from urllib.parse import urlsplit, urlunsplit
 
+import geopandas as gpd
 import pystac_client
+from shapely.geometry import box
 
 from .base import STACSource
 
 logger = logging.getLogger(__name__)
+
+# Buffer (meters, in the item's own native CRS) added around a
+# reprojected AOI bbox before windowing a read -- see
+# _windowed_bbox_for_item()'s docstring for why this is needed at all.
+# 5km is generous relative to the sub-pixel rounding effect it guards
+# against (a few tens of meters at most, per clip_xarray_using_id()'s
+# own docstring), so this is a safety margin, not a tuned value.
+_WINDOW_READ_BUFFER_M = 5000
 
 
 class MPCSource(STACSource):
@@ -106,7 +116,7 @@ class MPCSource(STACSource):
     def vv_vh_hrefs(self, item):
         return item.assets[self._vv_asset_key].href, item.assets[self._vh_asset_key].href
 
-    def read_vv_vh(self, item, overview_level=None):
+    def read_vv_vh(self, item, overview_level=None, bbox=None):
         """
         Open and return (vv_dataarray, vh_dataarray) for item.
 
@@ -114,8 +124,25 @@ class MPCSource(STACSource):
         up front), since Azure SAS tokens are short-lived (~45 min) and a
         queued read can outlive a token that was fresh when this method was
         called.
+
+        bbox, if given (minx, miny, maxx, maxy in EPSG:4326 -- see
+        STACSource.read_vv_vh's docstring), is reprojected into item's
+        own native CRS (from its STAC proj:code/proj:epsg properties --
+        a Sentinel-1 scene's UTM zone is not necessarily the AOI/tile's
+        own) and used to windowed-read only that portion of the asset,
+        instead of the full scene. MPC's Sentinel-1 RTC assets are real
+        COGs (STAC-declared "profile=cloud-optimized", confirmed via
+        rasterio: internally tiled, 512x512 blocks, 6 overview levels),
+        so this is a real network-transfer reduction, not just an
+        in-memory one -- measured ~540x fewer bytes for a 5km AOI window
+        vs. a full ~1.86GB scene (see tests/test_sources.py and this
+        session's investigation notes). Falls back to a full,
+        unwindowed read if item doesn't carry proj:code/proj:epsg --
+        windowing is an optimization, not a correctness requirement.
         """
         from ..utils import open_rasterio_with_retry
+
+        native_bbox = self._windowed_bbox_for_item(item, bbox) if bbox is not None else None
 
         # Re-sign before opening, rather than trusting the SAS token
         # vv_vh_hrefs() returns from search time -- that token was minted
@@ -139,9 +166,46 @@ class MPCSource(STACSource):
         # EVERY attempt, so a token that expires mid-retry-loop is simply
         # replaced by a fresh one on the next attempt rather than retried.
         vv_href, vh_href = self.vv_vh_hrefs(item)
-        vv_ds = open_rasterio_with_retry(lambda: self.sign(vv_href), overview_level=overview_level, masked=True)
-        vh_ds = open_rasterio_with_retry(lambda: self.sign(vh_href), overview_level=overview_level, masked=True)
+        vv_ds = open_rasterio_with_retry(
+            lambda: self.sign(vv_href), overview_level=overview_level, masked=True, bbox=native_bbox,
+        )
+        vh_ds = open_rasterio_with_retry(
+            lambda: self.sign(vh_href), overview_level=overview_level, masked=True, bbox=native_bbox,
+        )
         return vv_ds, vh_ds
+
+    @staticmethod
+    def _windowed_bbox_for_item(item, bbox_4326):
+        """
+        Reproject bbox_4326 (minx, miny, maxx, maxy in EPSG:4326) into
+        item's own native CRS, buffered by _WINDOW_READ_BUFFER_M meters.
+
+        The buffer matters: clip_xarray_using_id()'s later reproject+
+        interp step already extrapolates a little past the raw
+        reprojected extent to cover a sub-pixel rounding gap at the
+        tile edge (see its own docstring) -- a full-scene read always
+        had a whole scene's worth of margin for that to draw on. A
+        tightly-windowed read has none by default, so this buffer
+        preserves the same safety margin instead of risking a new
+        edge-of-window NaN gap that a full read never produced.
+
+        Returns None (falls back to a full, unwindowed read) if item
+        doesn't carry proj:code/proj:epsg.
+        """
+        item_crs = item.properties.get('proj:code')
+        if item_crs is None:
+            epsg = item.properties.get('proj:epsg')
+            item_crs = f'EPSG:{epsg}' if epsg is not None else None
+        if item_crs is None:
+            return None
+
+        minx, miny, maxx, maxy = bbox_4326
+        native_bounds = gpd.GeoSeries([box(minx, miny, maxx, maxy)], crs='EPSG:4326').to_crs(item_crs).iloc[0].bounds
+        minx, miny, maxx, maxy = native_bounds
+        return (
+            minx - _WINDOW_READ_BUFFER_M, miny - _WINDOW_READ_BUFFER_M,
+            maxx + _WINDOW_READ_BUFFER_M, maxy + _WINDOW_READ_BUFFER_M,
+        )
 
     def search_dem(self, bbox):
         if self._catalog is None:

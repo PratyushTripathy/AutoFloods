@@ -565,6 +565,22 @@ class flood_mapper():
             self.wet_aoi_scene_dict, self.wet_scene_aoi_dict = aoi_scene_dict, scene_aoi_dict
             self.wet_skipped_ids = skipped_ids
 
+    def _aoi_union_bounds_4326(self):
+        """
+        (minx, miny, maxx, maxy) in EPSG:4326 covering every AOI this
+        flood_mapper instance is processing -- the same combined extent
+        already used for the STAC search itself (self.aoi_union, a
+        single-element GeoJSON-Polygon-like list from
+        utils.gpd_to_json(separate=False)). Used to pass a windowed-read
+        hint into read_scenes() -> preprocessing.read_sentinel1_stac() ->
+        source.read_vv_vh() -- see MPCSource.read_vv_vh() for the source
+        that actually honors it.
+        """
+        coords = self.aoi_union[0]['coordinates'][0]
+        xs = [c[0] for c in coords]
+        ys = [c[1] for c in coords]
+        return (min(xs), min(ys), max(xs), max(ys))
+
     def read_scenes(self, dry_wet='dry', overview_level=3, max_workers=6):
         """
         Download+read every scene found by get_s1_items() (self.dry_s1_scenes
@@ -576,11 +592,18 @@ class flood_mapper():
         it (no pyramid, always native 30m). `max_workers` default (6) is
         a safe concurrency level against OPERASource -- see
         autofloods.sources's module docstring for source-specific guidance.
+
+        Passes this run's combined AOI bounds (_aoi_union_bounds_4326())
+        through to each read as a windowed-read hint -- MPCSource uses it
+        to fetch only the intersecting portion of its COG assets over the
+        network instead of the full scene; OPERASource ignores it.
         """
         if dry_wet == 'dry':
             s1_scenes = self.dry_s1_scenes
         elif dry_wet == 'wet':
             s1_scenes = self.wet_s1_scenes
+
+        aoi_bbox_4326 = self._aoi_union_bounds_4326()
 
         # read and reproject the images concurrently. This is I/O-bound
         # (network reads of remote COGs), not CPU-bound, so a thread pool
@@ -595,7 +618,9 @@ class flood_mapper():
         s1_combined = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
-                executor.submit(preprocessing.read_sentinel1_stac, item, self.source, overview_level)
+                executor.submit(
+                    preprocessing.read_sentinel1_stac, item, self.source, overview_level, aoi_bbox_4326,
+                )
                 for item in s1_scenes
             ]
             for future in concurrent.futures.as_completed(futures):

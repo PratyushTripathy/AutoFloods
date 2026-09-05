@@ -42,7 +42,7 @@ class STACSource(ABC):
         """
 
     @abstractmethod
-    def read_vv_vh(self, item, overview_level: int | None = None):
+    def read_vv_vh(self, item, overview_level: int | None = None, bbox: tuple | None = None):
         """
         Return (vv_dataarray, vh_dataarray) covering item's full extent,
         in this source's native CRS/resolution, unreprojected.
@@ -55,6 +55,16 @@ class STACSource(ABC):
         band belongs -- callers (autofloods.preprocessing) treat the
         return value as one scene either way, regardless of how many
         underlying files it took to build it.
+
+        bbox, if given, is (minx, miny, maxx, maxy) in EPSG:4326 -- the
+        AOI(s) actually being processed this run, an optional hint a
+        source MAY use to read only that window instead of the item's
+        full extent (real savings for a source backed by a real COG,
+        e.g. MPCSource; see its implementation). A source is free to
+        ignore this entirely and always return the full extent (e.g.
+        OPERASource, whose per-burst files are downloaded whole by
+        design -- see its docstring) -- callers must not assume the
+        returned DataArray is windowed just because bbox was passed.
         """
 
     @abstractmethod

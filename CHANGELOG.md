@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.1.0a15
+
+**Windowed reads for `MPCSource`**: reading a scene no longer always
+downloads the full asset before clipping to a tile.
+
+- `MPCSource.read_vv_vh()` now reprojects the AOI(s) being processed
+  into the scene's own native CRS (read from its STAC `proj:code`/
+  `proj:epsg` properties) and clips the still-lazy `rioxarray` handle
+  to that window -- via `.rio.clip_box()` -- **before** materializing
+  pixel data, instead of always calling `.load()` on the full scene
+  first. MPC's Sentinel-1 RTC assets are real COGs (internally tiled,
+  512x512 blocks, 6 overview levels, STAC-declared
+  `profile=cloud-optimized`), so this is a genuine reduction in bytes
+  fetched over the network, not just an in-memory optimization.
+- **Measured, live, through the real `read_vv_vh()` code path**: for a
+  ~5km AOI, the old (always-full-scene) path transfers 3,708,221,241
+  bytes (~3.71 GB, both VV+VH bands, from the assets' own STAC
+  `file:size`); the new windowed path transfers 33,320,222 bytes
+  (~33.3 MB) for the same AOI -- **~111x fewer bytes**. Verified
+  numerically identical to a full-read-then-clip result first, both on
+  a synthetic array and against the real remote asset (clip-before-load
+  and load-then-clip produce bit-identical pixels and coordinates).
+- A 5km buffer (in the scene's native CRS) is added around the
+  windowed extent, so the later reproject+resample step
+  (`clip_xarray_using_id()`) still has the same edge margin a
+  full-scene read always implicitly provided.
+- `OPERASource` is intentionally unchanged: it downloads whole burst
+  files to local disk by deliberate design (a prior reliability
+  choice, not a limitation being revisited here), so `bbox` is
+  accepted for interface compatibility but ignored.
+- Falls back to a full, unwindowed read if a scene lacks
+  `proj:code`/`proj:epsg` metadata -- windowing is an optimization,
+  not a correctness requirement.
+- Added 9 new tests covering the reprojection/buffer math and the
+  windowed-read call path (mocked network layer).
+
 ## 0.1.0a14
 
 Usability improvement: one-line progress feedback per pipeline step,

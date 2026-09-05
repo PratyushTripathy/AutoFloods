@@ -115,7 +115,7 @@ class TestReadScenes:
 
         monkeypatch.setattr(
             autofloods.preprocessing, 'read_sentinel1_stac',
-            lambda item, source, overview_level: (item, {'vv_ds': MagicMock(), 'vh_ds': MagicMock()}),
+            lambda item, source, overview_level, bbox=None: (item, {'vv_ds': MagicMock(), 'vh_ds': MagicMock()}),
         )
 
         with caplog.at_level(logging.INFO, logger='autofloods'):
@@ -182,7 +182,7 @@ class TestPrepareWetScenes:
         )
         monkeypatch.setattr(
             autofloods.preprocessing, 'read_sentinel1_stac',
-            lambda item, source, overview_level: (item, {'vv_ds': MagicMock(), 'vh_ds': MagicMock()}),
+            lambda item, source, overview_level, bbox=None: (item, {'vv_ds': MagicMock(), 'vh_ds': MagicMock()}),
         )
         monkeypatch.setattr(
             autofloods.preprocessing, 'clip_xarray_using_id',

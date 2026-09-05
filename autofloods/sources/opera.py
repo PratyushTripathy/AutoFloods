@@ -196,13 +196,19 @@ class OPERASource(STACSource):
             "returning DataArrays."
         )
 
-    def read_vv_vh(self, item, overview_level=None):
+    def read_vv_vh(self, item, overview_level=None, bbox=None):
         """
         Download item's bursts to local disk, mosaic each band into a VRT,
         and return (vv_dataarray, vh_dataarray) covering the pass's full
         footprint. overview_level is accepted for interface compatibility
         but ignored -- OPERA RTC-S1 GeoTIFFs ship without an internal
-        overview pyramid.
+        overview pyramid. bbox is likewise accepted (per the STACSource
+        contract) but ignored: bursts are downloaded whole to local disk
+        by deliberate design (see the comment below), not windowed-read
+        from a remote COG, so there is nothing to window here. Unlike
+        MPCSource, this is not a current limitation being left for later
+        -- it's the same reliability tradeoff that motivated the full-
+        download approach in the first place.
         """
         from ..utils import open_rasterio_with_retry
         import shutil

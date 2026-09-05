@@ -311,7 +311,20 @@ class TestReadSentinel1Stac:
         assert item_id == 'scene123'
         np.testing.assert_allclose(out['vv_ds'].values, 10 ** (vv_db.values / 10))
         np.testing.assert_allclose(out['vh_ds'].values, 10 ** (vh_db.values / 10))
-        source.read_vv_vh.assert_called_once_with(stac_item, overview_level=2)
+        source.read_vv_vh.assert_called_once_with(stac_item, overview_level=2, bbox=None)
+
+    def test_passes_bbox_through_to_source(self):
+        source = MagicMock()
+        source.read_vv_vh.return_value = (
+            xr.DataArray(np.array([[0.0]])), xr.DataArray(np.array([[0.0]])),
+        )
+        stac_item = MagicMock()
+        stac_item.id = 'scene123'
+        bbox = (84.9, 24.9, 85.6, 25.6)
+
+        preprocessing.read_sentinel1_stac(stac_item, source, overview_level=2, bbox=bbox)
+
+        source.read_vv_vh.assert_called_once_with(stac_item, overview_level=2, bbox=bbox)
 
 
 class TestReprojectClipStac:

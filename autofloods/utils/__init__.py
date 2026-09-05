@@ -105,7 +105,7 @@ def default_max_workers():
     return max(1, ncpu - 1)
 
 
-def open_rasterio_with_retry(href, overview_level=None, masked=True, max_attempts=5, backoff_seconds=20):
+def open_rasterio_with_retry(href, overview_level=None, masked=True, max_attempts=5, backoff_seconds=20, bbox=None):
     """
     Open a (possibly remote) raster with rioxarray, under a bounded GDAL
     HTTP timeout/retry policy (see GDAL_HTTP_ENV) plus an application-level
@@ -133,6 +133,21 @@ def open_rasterio_with_retry(href, overview_level=None, masked=True, max_attempt
                       Number of attempts before raising the last error.
     backoff_seconds : int
                       Delay between attempts.
+    bbox            : (minx, miny, maxx, maxy) or None
+                      If given, in the SAME CRS as the raster being
+                      opened (the caller is responsible for reprojecting
+                      -- this function has no way to know a remote
+                      href's CRS before opening it), clips to this
+                      window BEFORE materializing pixel data, so a COG's
+                      internal tiling means only the intersecting tiles
+                      are actually fetched over the network (measured:
+                      ~540x fewer bytes for a 5km AOI window vs. a full
+                      ~1.86GB Sentinel-1 RTC scene -- see
+                      MPCSource.read_vv_vh(), the only current caller).
+                      None (default) reads the full extent, unchanged
+                      from this function's original behavior -- what
+                      OPERASource's local VRT path still uses, since
+                      windowing only helps for a real remote COG.
 
     Returns
     -------
@@ -149,7 +164,8 @@ def open_rasterio_with_retry(href, overview_level=None, masked=True, max_attempt
                 # rioxarray.open_rasterio() returns a lazy handle -- the
                 # actual pixel data isn't fetched until something forces
                 # it (e.g. decibel_to_linear()'s arithmetic much later,
-                # possibly on a different thread). A transient read
+                # possibly on a different thread, or .rio.clip_box()
+                # below, or the final .load()). A transient read
                 # failure at that point (e.g. a dropped connection
                 # mid-transfer -- TIFFFillTile: got 0 bytes, expected N)
                 # would happen entirely outside this function's retry
@@ -157,6 +173,15 @@ def open_rasterio_with_retry(href, overview_level=None, masked=True, max_attempt
                 # loop, so transient failures are caught and retried
                 # exactly like a failed open() would be.
                 da = rioxarray.open_rasterio(attempt_href, **kwargs)
+                if bbox is not None:
+                    # Still lazy: clip_box() only narrows the x/y
+                    # coordinate selection on the not-yet-materialized
+                    # array. Only the .load() below actually triggers
+                    # GDAL to fetch data -- scoped to this narrower
+                    # selection, i.e. only the COG tiles intersecting
+                    # bbox, via HTTP range requests.
+                    minx, miny, maxx, maxy = bbox
+                    da = da.rio.clip_box(minx, miny, maxx, maxy)
                 return da.load()
         except Exception as exc:
             last_exc = exc

@@ -196,6 +196,57 @@ class TestOpenRasterioWithRetry:
         assert seen_hrefs == ["href-attempt-1", "href-attempt-2"]
 
 
+class TestOpenRasterioWithRetryBbox:
+    """
+    bbox= enables a windowed read (see MPCSource.read_vv_vh(), the only
+    current caller that passes one): open_rasterio_with_retry() must
+    clip to bbox BEFORE returning, and leave the full-extent behavior
+    (bbox=None, the default, used by OPERASource's local VRT path)
+    completely unchanged.
+    """
+
+    def _make_geo_dataarray(self):
+        data = np.arange(100, dtype='float64').reshape(10, 10)
+        da = xr.DataArray(
+            data, dims=('y', 'x'),
+            coords={'y': np.arange(1000, 0, -100), 'x': np.arange(0, 1000, 100)},
+        )
+        da.rio.write_crs('EPSG:32645', inplace=True)
+        return da
+
+    def test_bbox_none_returns_full_extent_unchanged(self, monkeypatch):
+        da = self._make_geo_dataarray()
+        monkeypatch.setattr(utils.rioxarray, "open_rasterio", lambda href, **k: da)
+
+        result = utils.open_rasterio_with_retry("fake_href", max_attempts=1, bbox=None)
+
+        assert result.shape == (10, 10)
+        np.testing.assert_array_equal(result.values, da.values)
+
+    def test_bbox_clips_to_window_with_correct_values(self, monkeypatch):
+        da = self._make_geo_dataarray()
+        monkeypatch.setattr(utils.rioxarray, "open_rasterio", lambda href, **k: da)
+
+        # roughly the top-left quadrant
+        bbox = (0, 600, 400, 1000)
+        result = utils.open_rasterio_with_retry("fake_href", max_attempts=1, bbox=bbox)
+
+        assert result.sizes["y"] < 10 and result.sizes["x"] < 10
+        expected = da.rio.clip_box(*bbox)
+        np.testing.assert_array_equal(result.values, expected.values)
+
+    def test_bbox_outside_extent_raises_and_is_retried_then_reraised(self, monkeypatch):
+        da = self._make_geo_dataarray()
+        monkeypatch.setattr(utils.rioxarray, "open_rasterio", lambda href, **k: da)
+        monkeypatch.setattr(utils.time, "sleep", lambda s: None)
+
+        with pytest.raises(Exception):
+            utils.open_rasterio_with_retry(
+                "fake_href", max_attempts=2, backoff_seconds=0,
+                bbox=(1_000_000, 1_000_000, 1_000_100, 1_000_100),
+            )
+
+
 class TestGpdToJson:
     def _make_grid_file(self, tmp_path):
         gdf = gpd.GeoDataFrame(

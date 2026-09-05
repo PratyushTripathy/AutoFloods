@@ -99,6 +99,86 @@ class TestMPCSourceSign:
         assert vh_href == "https://example/vh.tif"
 
 
+class TestMPCSourceWindowedBboxForItem:
+    """
+    _windowed_bbox_for_item() is the pure reprojection+buffer math
+    behind MPCSource's windowed reads -- see read_vv_vh()'s docstring.
+    A real UTM zone (EPSG:32645, matching this project's other tests)
+    is used so the reprojected numbers are independently checkable, not
+    just "some other number came out".
+    """
+
+    def test_reprojects_and_buffers_bbox(self):
+        item = MagicMock()
+        item.properties = {"proj:code": "EPSG:32645"}
+        # a small bbox near 85.2E, 25.2N (this project's usual test AOI)
+        bbox_4326 = (85.15, 25.15, 85.25, 25.25)
+
+        result = MPCSource._windowed_bbox_for_item(item, bbox_4326)
+
+        import geopandas as gpd
+        from shapely.geometry import box
+        expected_native = gpd.GeoSeries(
+            [box(*bbox_4326)], crs="EPSG:4326",
+        ).to_crs("EPSG:32645").iloc[0].bounds
+
+        from autofloods.sources.mpc import _WINDOW_READ_BUFFER_M
+        assert result[0] == pytest.approx(expected_native[0] - _WINDOW_READ_BUFFER_M)
+        assert result[1] == pytest.approx(expected_native[1] - _WINDOW_READ_BUFFER_M)
+        assert result[2] == pytest.approx(expected_native[2] + _WINDOW_READ_BUFFER_M)
+        assert result[3] == pytest.approx(expected_native[3] + _WINDOW_READ_BUFFER_M)
+
+    def test_falls_back_to_proj_epsg_when_proj_code_absent(self):
+        item = MagicMock()
+        item.properties = {"proj:epsg": 32645}
+        result = MPCSource._windowed_bbox_for_item(item, (85.15, 25.15, 85.25, 25.25))
+        assert result is not None
+
+    def test_returns_none_when_no_crs_metadata_present(self):
+        item = MagicMock()
+        item.properties = {}
+        result = MPCSource._windowed_bbox_for_item(item, (85.15, 25.15, 85.25, 25.25))
+        assert result is None
+
+
+class TestMPCSourceReadVvVhBbox:
+    def test_passes_reprojected_bbox_to_open_rasterio_with_retry(self):
+        item = MagicMock()
+        item.properties = {"proj:code": "EPSG:32645"}
+        item.assets = {
+            "vv": MagicMock(href="https://example/vv.tif"),
+            "vh": MagicMock(href="https://example/vh.tif"),
+        }
+        src = MPCSource()
+
+        with patch("autofloods.utils.open_rasterio_with_retry") as mock_open, \
+             patch.object(src, "sign", side_effect=lambda href: href):
+            mock_open.return_value = MagicMock()
+            src.read_vv_vh(item, overview_level=None, bbox=(85.15, 25.15, 85.25, 25.25))
+
+        assert mock_open.call_count == 2
+        for call in mock_open.call_args_list:
+            assert call.kwargs["bbox"] is not None
+            assert len(call.kwargs["bbox"]) == 4
+
+    def test_bbox_none_passes_bbox_none_through(self):
+        item = MagicMock()
+        item.properties = {"proj:code": "EPSG:32645"}
+        item.assets = {
+            "vv": MagicMock(href="https://example/vv.tif"),
+            "vh": MagicMock(href="https://example/vh.tif"),
+        }
+        src = MPCSource()
+
+        with patch("autofloods.utils.open_rasterio_with_retry") as mock_open, \
+             patch.object(src, "sign", side_effect=lambda href: href):
+            mock_open.return_value = MagicMock()
+            src.read_vv_vh(item, overview_level=None, bbox=None)
+
+        for call in mock_open.call_args_list:
+            assert call.kwargs["bbox"] is None
+
+
 class TestOPERASourceAuthenticate:
     def test_authenticate_calls_client_open_with_only_supported_kwargs(self):
         """

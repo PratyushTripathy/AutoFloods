@@ -15,7 +15,7 @@ import itertools
 
 
 # define a function to read VV and VH tif files from the cloud and store all images in memory
-def read_sentinel1_stac(stac_item, source, overview_level=3):
+def read_sentinel1_stac(stac_item, source, overview_level=3, bbox=None):
     """
     Read a STAC item's VV/VH bands and convert them from decibel to linear
     scale (see utils.decibel_to_linear). Does NOT reproject -- every
@@ -29,6 +29,13 @@ def read_sentinel1_stac(stac_item, source, overview_level=3):
     source (autofloods.sources.STACSource) : Data source used to resolve VV/VH asset hrefs
                                               for stac_item, regardless of catalog.
     overview_level (int, optional)  : The level of overviews to use for reading the data. Default is 3.
+    bbox (tuple, optional)          : (minx, miny, maxx, maxy) in EPSG:4326, the AOI(s) actually
+                                       being processed this run -- passed through to
+                                       source.read_vv_vh() as an optional windowed-read hint
+                                       (honored by MPCSource for a real network-transfer
+                                       reduction; ignored by OPERASource, which downloads
+                                       whole burst files by design). None (default) reads the
+                                       item's full extent, unchanged from prior behavior.
 
     Returns
     _______
@@ -38,10 +45,11 @@ def read_sentinel1_stac(stac_item, source, overview_level=3):
     """
     # read the VV and VH bands (source-specific: a single file per band for
     # most catalogs, a same-pass burst mosaic for OPERA; either way this
-    # returns one dataset per band covering the item's full extent). Bounded
-    # GDAL HTTP timeout + retry with backoff is applied inside each source's
-    # implementation (see autofloods.utils.open_rasterio_with_retry).
-    vv_ds, vh_ds = source.read_vv_vh(stac_item, overview_level=overview_level)
+    # returns one dataset per band covering the item's full extent, or a
+    # windowed subset of it if bbox is given and the source supports it).
+    # Bounded GDAL HTTP timeout + retry with backoff is applied inside each
+    # source's implementation (see autofloods.utils.open_rasterio_with_retry).
+    vv_ds, vh_ds = source.read_vv_vh(stac_item, overview_level=overview_level, bbox=bbox)
 
     # convert decibel to linear
     vv_ds = decibel_to_linear(vv_ds)
