@@ -18,12 +18,31 @@ import autofloods.grid as grid
 from datetime import datetime
 import os, json, shutil
 import concurrent.futures
+import logging
 import xarray as xr
 import numpy as np
 import rasterio
 from rasterio.enums import Resampling
 
 __version__ = _pkg_version("autofloods")
+
+# A real, named logger (not the root logger -- logging.basicConfig()
+# is deliberately not used here, since that would mutate global
+# logging state and could clobber a user's own app-wide configuration)
+# with a default handler so one-line pipeline status messages print
+# out of the box in a notebook/script with zero setup. Still fully
+# standard logging: a user can silence this with
+# logging.getLogger('autofloods').setLevel(logging.WARNING), redirect
+# it by replacing .handlers, or mute it entirely with .disabled = True.
+# `if not logger.handlers` guards against stacking duplicate handlers
+# on a notebook re-import (e.g. autoreload).
+logger = logging.getLogger('autofloods')
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter('%(message)s'))
+    logger.addHandler(_handler)
+logger.setLevel(logging.INFO)
+logger.propagate = False
 #DEM_OUTFILE = r'nasadem_aoi_id.nc'
 SLOPE_OUTFILE = r'slope_aoi_id.nc'
 
@@ -344,6 +363,8 @@ class flood_mapper():
             for key in self.dry_months.keys()
         }
 
+        logger.info(f'Dry season set for {len(self.dry_months)} AOI(s): {self.dry_months}')
+
     def generate_dry_date_ranges(self):
         """
         Turn self.dry_months (per-AOI) into self.dry_dates: one
@@ -371,9 +392,9 @@ class flood_mapper():
             # generate_mean_std_by_aoi() reload the baseline from disk
             # via load_mean_std_by_aoi() as usual.
             self.dry_dates = []
-            print(
+            logger.info(
                 'All requested AOIs already have a completed dry-season baseline -- '
-                'skipping dry-season date range generation.', flush=True
+                'skipping dry-season date range generation.'
             )
             return
 
@@ -395,6 +416,11 @@ class flood_mapper():
             )
             for year in self.dry_years
             ]
+
+        logger.info(
+            f'Dry-season search range: {self.dry_dates[0][0]} to {self.dry_dates[-1][1]} '
+            f'({len(self.dry_years)} year(s))'
+        )
 
     def get_s1_items(self, dry_wet='dry', verbose=False):
         """
@@ -437,7 +463,10 @@ class flood_mapper():
         # generate scene_aoi dictionaries
         # It could be that the ID does not have any wet scene, this is a bug and needs to be fixed later
         self.generate_scene_aoi_dict(dry_wet=dry_wet, verbose=verbose)
-        
+
+        found_scenes = self.dry_s1_scenes if dry_wet == 'dry' else self.wet_s1_scenes
+        logger.info(f'Found {len(found_scenes)} {dry_wet}-season scene(s)')
+
 
     def generate_scene_aoi_dict(self, dry_wet='dry', verbose=False):
         """
@@ -578,6 +607,8 @@ class flood_mapper():
         elif dry_wet == 'wet':
             self.s1_wet_dict = s1_combined
 
+        logger.info(f'Read {len(s1_combined)} {dry_wet}-season scene(s)')
+
     def generate_mean_std_by_aoi(self, reproject_max_workers=None):
         """
         Fit each AOI's dry-season Z-score baseline (self.detector.fit_baseline)
@@ -655,6 +686,11 @@ class flood_mapper():
                 self.mean_std_by_aoi[id].to_netcdf(outfile)
 
         self.load_mean_std_by_aoi()
+
+        logger.info(
+            f'Baseline fit complete for {len(self.mean_std_by_aoi)} AOI(s): '
+            f'{sorted(self.mean_std_by_aoi.keys())}'
+        )
 
     def load_mean_std_by_aoi(self):
         """
@@ -749,6 +785,11 @@ class flood_mapper():
                     for id in self.selected_grid_id
                 }
 
+        logger.info(
+            f'Slope prepared for {len(self.selected_grid_id)} AOI(s) '
+            f'({len(slope_id_to_process)} newly computed)'
+        )
+
     def prepare_wet_scenes(self, overview_level=3, max_workers=6, reproject_max_workers=None):
         """
         Search, read, reproject, and clip every wet-season scene for each
@@ -809,6 +850,12 @@ class flood_mapper():
             for scene_id in self.wet_scenes_by_aoi[id]:
                 self.wet_scenes_by_aoi[id][scene_id] = self.wet_scenes_by_aoi[id][scene_id].where(
                     self.wet_scenes_by_aoi[id][scene_id] < 50, np.nan)
+
+        n_scenes = sum(len(v) for v in self.wet_scenes_by_aoi.values())
+        logger.info(
+            f'Wet-season scenes prepared for {len(self.wet_scenes_by_aoi)} AOI(s), '
+            f'{n_scenes} scene(s) total'
+        )
 
     def map_floods(self, vv_thd=-3, vh_thd=-3, rel_slope_thd=20, export_raster=True, export_vector=False, export_maps=False):
         """
@@ -882,6 +929,17 @@ class flood_mapper():
                     self.flood_dict[id][scene_id] = self.flood_dict[id][scene_id].where(
                         slope_xarray.values[0, :, :] < rel_slope_thd, 0
                     )
+
+        n_scenes = sum(len(v) for v in self.flood_dict.values())
+        n_flooded = sum(
+            int((scene == 3).sum())
+            for scenes in self.flood_dict.values()
+            for scene in scenes.values()
+        )
+        logger.info(
+            f'Flood maps generated for {len(self.flood_dict)} AOI(s), {n_scenes} scene(s): '
+            f'{n_flooded} high-confidence flooded pixels'
+        )
 
         dry_year_begin = min(self.dry_years)
         dry_year_end = max(self.dry_years)
@@ -1010,6 +1068,11 @@ class flood_mapper():
                               }}
                 )
 
+        n_dates = sum(v.sizes['date'] for v in self.flood_by_date.values())
+        logger.info(
+            f'Merged floods by date for {len(self.flood_by_date)} AOI(s), {n_dates} date(s) total'
+        )
+
         # export if the export parameter is true
         yearmonthtag = self._yearmonthtag()
 
@@ -1057,6 +1120,8 @@ class flood_mapper():
                                                         'x':self.mean_std_by_aoi[id].coords['x']
                                                     }
                                                     )
+
+        logger.info(f'Scene-count raster computed for {len(self.scene_count)} AOI(s)')
 
         # export if the export parameter is true
         dry_year_begin = min(self.dry_years)
@@ -1114,6 +1179,8 @@ class flood_mapper():
         """
         for id in self.flood_raster_dict:
             autofloods.postprocessing.aggregate_monthly(self.flood_raster_dict[id])
+
+        logger.info(f'Monthly aggregation complete for {len(self.flood_raster_dict)} AOI(s)')
 
 
     def flush_output(self, remove_slope=False):

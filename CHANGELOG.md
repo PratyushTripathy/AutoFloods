@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.0a14
+
+Usability improvement: one-line progress feedback per pipeline step,
+configurable via standard Python logging.
+
+- **`flood_mapper`'s pipeline methods now each log a one-line INFO
+  status summary** on completion (`get_dry_dates`, `generate_dry_date_ranges`,
+  `get_s1_items`, `read_scenes`, `generate_mean_std_by_aoi`,
+  `prepare_slope`, `prepare_wet_scenes`, `map_floods`,
+  `merge_floods_by_date`, `generate_number_of_scenes`, `monthly_sum`) --
+  e.g. `Found 42 dry-season scene(s)`, `Flood maps generated for 1
+  AOI(s), 12 scene(s): 8431 high-confidence flooded pixels`. Uses a
+  real, named `logging.getLogger('autofloods')` logger with a default
+  handler so this prints out of the box in a notebook/script with zero
+  setup, but is still fully standard logging -- silence it with
+  `logging.getLogger('autofloods').setLevel(logging.WARNING)`, redirect
+  it by replacing `.handlers`, or mute it entirely with `.disabled =
+  True`. No `logging.basicConfig()` call, so it never touches global
+  logging state.
+- Added 12 new tests confirming each message fires (`tests/
+  test_pipeline_logging.py`).
+
 ## 0.1.0a13
 
 **Fixes a regression introduced in 0.1.0a12** (the Welford's-algorithm
