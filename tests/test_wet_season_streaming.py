@@ -266,3 +266,54 @@ class TestMapFloodsRerunWithoutRetriggeringPrepareWetScenes:
         vv_only_scene = 'S1A_IW_GRDH_1SDV_20240715T000000_20240715T000025_000001_000001_rtc'
         assert lenient_result[vv_only_scene][0, 0] == 2  # -2.5 threshold: flagged VV-only
         assert strict_result[vv_only_scene][0, 0] == 0   # -10 threshold: no longer flagged
+
+
+class TestMapFloodsExportMapsAndVector:
+    """map_floods()'s export_vector=True/export_maps=True paths both
+    reload a scene's just-written classified raster from disk via
+    xr.load_dataarray(..., engine='rasterio') -- which returns a (band,
+    y, x) array, not the 2D (y, x) array these paths got from the old
+    in-memory architecture. Every other map_floods() test in this file
+    (and in test_pipeline_logging.py/test_keep_intermediate_in_memory.py)
+    explicitly passes export_vector=False, export_maps=False, so this
+    gap slipped through the same way the earlier band-dimension bug did
+    -- these tests run the real streaming map_floods() with both flags
+    on, through no mocks beyond the network/reproject chain."""
+
+    def test_export_maps_writes_one_png_per_scene(self, tmp_path, monkeypatch):
+        fm = _make_flood_mapper(tmp_path)
+        fm.mean_std_by_aoi = {TILE_ID: _make_baseline()}
+        _wire_wet_scene_mocks(fm, monkeypatch)
+        _write_dummy_slope(fm)
+
+        fm.prepare_wet_scenes()
+        fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, export_vector=False, export_maps=True)
+
+        image_dir = os.path.join(fm.output_base, 'flood_image')
+        pngs = os.listdir(image_dir)
+        assert len(pngs) == len(SCENE_DEFS)
+        assert all(os.path.getsize(os.path.join(image_dir, f)) > 0 for f in pngs)
+
+    def test_export_vector_writes_gpkg_for_flooded_scenes(self, tmp_path, monkeypatch):
+        fm = _make_flood_mapper(tmp_path)
+        fm.mean_std_by_aoi = {TILE_ID: _make_baseline()}
+        _wire_wet_scene_mocks(fm, monkeypatch)
+        _write_dummy_slope(fm)
+
+        fm.prepare_wet_scenes()
+        fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, export_vector=True, export_maps=False)
+
+        # polygonize_flood_raster() only keeps class-3 (high-confidence,
+        # both VV+VH anomalous) pixels -- of SCENE_DEFS, only the
+        # 20240717 scene has one (at (1,0)); the two 20240715 scenes are
+        # single-band-only (class 1/2) and the 20240716 scene has none,
+        # so those three scenes are correctly skipped (empty gdf), not a
+        # bug -- see map_floods()'s "Flood cells not found" print.
+        flooded_scene = 'S1A_IW_GRDH_1SDV_20240717T000000_20240717T000025_000004_000004_rtc'
+        assert list(fm.flood_gdf_dict[TILE_ID].keys()) == [flooded_scene]
+        gdf = fm.flood_gdf_dict[TILE_ID][flooded_scene]
+        assert gdf.crs is not None
+        assert gdf.shape[0] > 0
+
+        outdir = os.path.join(fm.output_base, 'flood_vector')
+        assert len(os.listdir(outdir)) == 1

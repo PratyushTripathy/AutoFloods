@@ -1151,7 +1151,14 @@ class flood_mapper():
             flood_vector_outfile = os.path.join(self.output_base, 'flood_vector', 'floodextent_id.gpkg')
             for id in self.flood_dict:
                 for scene_id, flood_path in self.flood_dict[id].items():
-                    classified = xr.load_dataarray(flood_path, engine='rasterio')
+                    # xr.load_dataarray(..., engine='rasterio') returns a
+                    # (band, y, x) array (band=1) and doesn't wire up a
+                    # CRS, same as the slope-reload case above -- squeeze
+                    # the band dim and borrow the CRS from mean_std_by_aoi
+                    # (same tile/UTM zone) rather than the export writing
+                    # one itself (export_xarray() never writes CRS).
+                    classified = xr.load_dataarray(flood_path, engine='rasterio').squeeze('band', drop=True)
+                    classified = classified.rio.write_crs(self.mean_std_by_aoi[id].rio.crs)
                     gdf = autofloods.postprocessing.polygonize_flood_raster(classified)
                     outfile_flood = flood_vector_outfile.replace('_id.gpkg', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{"_".join(scene_id.split("_")[4:])}.gpkg')
                     # export only if the GDF has any flood cells
@@ -1167,7 +1174,11 @@ class flood_mapper():
             flood_map_outfile = os.path.join(self.output_base, 'flood_image', 'floodmap_id.png')
             for id in self.flood_dict:
                 for scene_id, flood_path in self.flood_dict[id].items():
-                    classified = xr.load_dataarray(flood_path, engine='rasterio')
+                    # squeeze the (band, y, x) shape engine='rasterio' reload
+                    # gives back down to (y, x) -- flood_images() expects
+                    # exactly 2D, matching what it always got in the old
+                    # in-memory (pre-streaming) architecture.
+                    classified = xr.load_dataarray(flood_path, engine='rasterio').squeeze('band', drop=True)
                     outfile_flood = flood_map_outfile.replace('_id.png', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{"_".join(scene_id.split("_")[4:])}.png')
 
                     mapfloods.flood_images(

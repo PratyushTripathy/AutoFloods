@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.1.0a20
+
+**Fix two crashes in the streaming `map_floods()`'s `export_maps=True`/
+`export_vector=True` paths, introduced by 0.1.0a19's disk-cache
+restructure and untested until now** (every `map_floods()` call in the
+test suite passed `export_vector=False, export_maps=False`).
+
+- **Band-dimension crash (`export_maps=True`)**: `map_floods()` now
+  reloads each scene's just-written classified raster from disk via
+  `xr.load_dataarray(..., engine='rasterio')`, which returns a
+  `(band, y, x)` array (band size 1) instead of the `(y, x)` array
+  `flood_images()` got directly from memory in the old architecture --
+  `height, width = flood_xarray.shape` then raised
+  `ValueError: too many values to unpack (expected 2)`. Fixed by
+  squeezing the band dimension after reload.
+- **Missing-CRS crash (`export_vector=True`)**: the same reload also
+  came back with `rio.crs = None`, crashing
+  `postprocessing.polygonize_flood_raster()` at
+  `gdf.crs = data.rio.crs.to_string()`. Root cause:
+  `utils.export_xarray()` never writes a CRS into the GeoTIFF it
+  produces, even though the classified array has one in memory (it's
+  inherited from the dry-season baseline) -- this is a pre-existing
+  gap in `export_xarray()` itself, not something the streaming
+  restructure introduced, just never previously hit because nothing
+  reloaded and re-used a flood raster's CRS before. **Fixed for flood
+  exports specifically**: the `export_vector=True` reload now borrows
+  CRS from `self.mean_std_by_aoi[id]` (same tile/UTM zone), matching
+  the pattern already used for the slope reload. The underlying
+  `export_xarray()` gap is not fixed at the root and may affect other
+  export call sites (slope, the merged-by-date flood stack, scene
+  counts) that haven't hit this exact crash only because nothing
+  currently reloads and polygonizes them -- see the repo's internal
+  notes for the full list of affected call sites, deferred to keep
+  this fix scoped to the reported crash.
+- Added `TestMapFloodsExportMapsAndVector` (`tests/test_wet_season_streaming.py`),
+  running the real streaming `map_floods()` with both flags on, closing
+  the test-coverage gap that let both bugs ship in 0.1.0a19.
+
+Full test suite: 176 passing.
+
 ## 0.1.0a19
 
 **Major architectural fix: the wet-season pipeline (`prepare_wet_scenes()`
