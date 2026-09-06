@@ -43,19 +43,15 @@ fishnet_grid = generate_grid(aoi, mode='utm_fishnet', tile_size_km=50)
 
 `generate_grid()` is purely geometric -- it never assigns a real
 dry-season value itself, since dry season is climate knowledge, not
-derivable from AOI geometry (and baking a single uniform value into
-grid generation would also preclude the more realistic case of
-per-tile variation). Every tile's `dry_month` column comes back set to
-the placeholder `"REQUIRED"`; set it yourself afterward, before saving
-or using the grid:
+derivable from AOI geometry. Every tile's `dry_month` column comes back
+set to the placeholder `"REQUIRED"`; set it yourself afterward, before
+saving or using the grid:
 
 ```python
 mgrs_grid['dry_month'] = '04,05'  # same value for every tile
 mgrs_grid.to_file('resources/my_mgrs_grid.gpkg')
 
-# or, for per-tile variation:
-fishnet_grid.loc[fishnet_grid['zone'].str.startswith('43'), 'dry_month'] = '04,05'
-fishnet_grid.loc[fishnet_grid['zone'].str.startswith('44'), 'dry_month'] = '05,06'
+fishnet_grid['dry_month'] = '04,05'  # same value for every tile
 fishnet_grid.to_file('resources/my_fishnet_grid.gpkg')
 ```
 
