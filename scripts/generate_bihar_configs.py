@@ -39,7 +39,7 @@ detector:
 detection:
   vv_thd: -2.5
   vh_thd: -2.5
-  rel_slope_thd: 20
+  slope_thd: 20
 
 read:
   overview_level: null

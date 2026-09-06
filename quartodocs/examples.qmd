@@ -134,7 +134,7 @@ and per-month outputs.
 fm.prepare_slope(dem_overview=0, buffer=500)  # compute/cache the terrain-slope mask
 
 fm.prepare_wet_scenes(overview_level=None, max_workers=6)  # search, read, reproject wet-season scenes
-fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20,
+fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, slope_thd=15,
               export_vector=False, export_maps=False)  # classify each scene against the baseline
 fm.merge_floods_by_date(export_raster=True)       # collapse per-scene results into one band per date
 fm.generate_number_of_scenes(export_raster=True)  # per-pixel count of VALID (non-gap) observations
@@ -152,7 +152,7 @@ and left NaN only where a gap pixel's entire neighborhood is also gap.
 Off by default -- no behavior change unless you opt in:
 
 ```python
-fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20,
+fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, slope_thd=15,
               smooth=True, smooth_kernel_size=3)
 ```
 
@@ -161,7 +161,7 @@ it to disk (`output_dir/tile<id>/wet_scenes_cache/`) rather than
 keeping every scene in memory -- this is what keeps memory bounded
 regardless of how many wet-season scenes an AOI has, instead of scaling
 with scene count. One consequence worth knowing: **`map_floods()` can
-be called again with different `vv_thd`/`vh_thd`/`rel_slope_thd` values
+be called again with different `vv_thd`/`vh_thd`/`slope_thd` values
 without re-running `prepare_wet_scenes()`** -- it just re-reads the same
 cached scenes and overwrites its own classified output, so re-tuning
 thresholds doesn't require re-downloading or re-reprojecting anything.
@@ -172,6 +172,16 @@ always written to disk (there's no longer an in-memory result to keep
 around if it weren't). If you have an existing script that calls
 `fm.map_floods(..., export_raster=False)` or `export_raster=True`,
 drop that argument -- passing it now raises `TypeError`.
+
+**Renamed (0.1.0a26, deprecated not removed)**: `map_floods()`'s
+`rel_slope_thd` parameter is now `slope_thd` -- the value it's
+compared against is a flat absolute per-pixel slope cutoff in degrees
+(see `preprocessing.compute_slope()`), nothing normalized against a
+neighborhood, percentile, or tile-wide reference, so the `rel_` prefix
+was a leftover misnomer. `rel_slope_thd=` still works -- it emits a
+`DeprecationWarning` and forwards to `slope_thd`, so existing scripts
+and config YAMLs (including every `scripts/configs/bihar_opera/*.yaml`)
+keep working unchanged. New code should use `slope_thd=` directly.
 
 This is the exact method sequence `run_autofloods.py` (Option 2 below)
 drives internally -- see the `flood_mapper` class docstring in the [API
@@ -212,7 +222,7 @@ detector:
 detection:
   vv_thd: -2.5
   vh_thd: -2.5
-  rel_slope_thd: 20
+  slope_thd: 15
 
 read:
   overview_level: null       # int for MPC (e.g. 0); ignored by OPERASource

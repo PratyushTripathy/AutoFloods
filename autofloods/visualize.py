@@ -46,7 +46,7 @@ from rasterio.enums import Resampling
 from skimage.transform import downscale_local_mean
 
 from . import SLOPE_OUTFILE
-from .utils import _extract_date_token, linear_to_decibel
+from .utils import _extract_date_token, linear_to_decibel, sanitize_scene_id_for_filename
 
 # switch off displaying maps (matches autofloods.mapfloods's convention)
 plt.ioff()
@@ -224,7 +224,7 @@ def _flood_scene_raster_path(fm, aoi_id, scene_id):
     return outfile.replace(
         '_id.tif',
         f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_'
-        f'{aoi_id}_{"_".join(scene_id.split("_")[4:])}.tif'
+        f'{aoi_id}_{sanitize_scene_id_for_filename(scene_id)}.tif'
     )
 
 

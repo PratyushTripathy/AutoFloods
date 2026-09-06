@@ -15,6 +15,7 @@ under test.
 """
 import logging
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -53,6 +54,23 @@ def _synthetic_grid_array(size=3, cell_size=30.0, n_band=1):
         data, dims=('band', 'y', 'x'), coords={'band': np.arange(n_band), 'y': y, 'x': x},
     )
     return da.rio.write_crs('EPSG:32645')
+
+
+def _native_covering_array(size=10):
+    """A real EPSG:4326 array genuinely covering TILE_ID's real extent
+    in GRID_PATH -- unlike _synthetic_grid_array (an arbitrary local-CRS
+    stand-in for already-final-grid-shaped output), this is needed
+    wherever a raw scene goes through a REAL .rio.reproject()/.rio.clip()
+    (read_scenes()'s dry-season rough-reproject step, unmocked), which
+    would otherwise raise NoDataInBounds against non-overlapping fake
+    coordinates."""
+    x_min, y_min, x_max, y_max = 84.9, 24.9, 86.1, 26.1  # comfortably covers tile 318
+    xs = np.linspace(x_min, x_max, size)
+    ys = np.linspace(y_max, y_min, size)
+    data = np.ones((1, size, size), dtype='float64')
+    da = xr.DataArray(data, dims=('band', 'y', 'x'), coords={'band': [1], 'y': ys, 'x': xs})
+    da.rio.write_crs('EPSG:4326', inplace=True)
+    return da
 
 
 class TestGetDryDates:
@@ -111,11 +129,17 @@ class TestGetS1Items:
 class TestReadScenes:
     def test_logs_scenes_read(self, tmp_path, monkeypatch, caplog):
         fm = _make_flood_mapper(tmp_path)
-        fm.dry_s1_scenes = ['s1', 's2', 's3']
+        # real STAC search results are Item objects with a .id attribute
+        # (scene_id) -- read_scenes()'s default streaming path needs a
+        # real item to look up when reprojecting/caching per AOI.
+        fm.dry_s1_scenes = [SimpleNamespace(id='s1'), SimpleNamespace(id='s2'), SimpleNamespace(id='s3')]
+        fm.dry_aoi_scene_dict = {TILE_ID: ['s1', 's2', 's3']}
 
         monkeypatch.setattr(
             autofloods.preprocessing, 'read_sentinel1_stac',
-            lambda item, source, overview_level, bbox=None: (item, {'vv_ds': MagicMock(), 'vh_ds': MagicMock()}),
+            lambda item, source, overview_level, bbox=None: (
+                item.id, {'vv_ds': _native_covering_array(), 'vh_ds': _native_covering_array()},
+            ),
         )
 
         with caplog.at_level(logging.INFO, logger='autofloods'):
@@ -172,7 +196,10 @@ class TestPrepareWetScenes:
         fm.mean_std_by_aoi = {TILE_ID: _synthetic_grid_array()}
         fm.wet_dates = fm.wet_dates  # already set by __init__
 
-        monkeypatch.setattr(fm.source, 'search_sentinel1', lambda **k: ['s1', 's2', 's3'])
+        monkeypatch.setattr(
+            fm.source, 'search_sentinel1',
+            lambda **k: [SimpleNamespace(id='s1'), SimpleNamespace(id='s2'), SimpleNamespace(id='s3')],
+        )
         monkeypatch.setattr(
             utils, 'seggregate_sentinel_search',
             lambda aoi_list, search_items: (
@@ -182,7 +209,10 @@ class TestPrepareWetScenes:
         )
         monkeypatch.setattr(
             autofloods.preprocessing, 'read_sentinel1_stac',
-            lambda item, source, overview_level, bbox=None: (item, {'vv_ds': MagicMock(), 'vh_ds': MagicMock()}),
+            lambda item, source, overview_level, bbox=None: (
+                item.id, {'vv_ds': _synthetic_grid_array(n_band=1).squeeze('band', drop=True),
+                          'vh_ds': _synthetic_grid_array(n_band=1).squeeze('band', drop=True)},
+            ),
         )
         monkeypatch.setattr(
             autofloods.preprocessing, 'clip_xarray_using_id',

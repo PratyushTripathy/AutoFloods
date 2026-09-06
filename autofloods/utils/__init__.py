@@ -722,6 +722,42 @@ def _extract_date_token(key, date_index=-5):
     raise ValueError(f"Could not find an 8-digit date token in {key!r}")
 
 
+_UNSAFE_FILENAME_CHARS_RE = re.compile(r'[^A-Za-z0-9_-]')
+
+
+def sanitize_scene_id_for_filename(scene_id):
+    """
+    Turn a scene_id into a filesystem-safe, per-scene-unique filename
+    token by sanitizing the FULL scene_id -- not slicing out a
+    positional suffix (e.g. the old `scene_id.split('_')[4:]` pattern
+    map_floods() used to build its per-scene output filenames).
+
+    That positional-slice approach silently collapsed every OPERA-style
+    scene_id ("OPERA_PASS_{YYYYMMDD}", 3 underscore-separated tokens) to
+    an EMPTY suffix (`[4:]` is past the end), so every scene in a run
+    wrote to (and overwrote) the exact same output path -- a real,
+    confirmed bug (see the 2026-09-06 investigation: dormant in the
+    published Bihar production record only because that run happened to
+    use export_raster=False; live on the current default streaming
+    path, which exports unconditionally). It worked for MPC's much
+    longer compound IDs (e.g.
+    "S1A_IW_GRDH_1SDV_20200730T130923_20200730T130948_033663_03E6C1_rtc",
+    9 tokens) purely by luck of MPC's ID shape happening to leave enough
+    distinct trailing tokens (acquisition timestamps, orbit, data-take
+    ID) -- not because the slicing logic was actually correct.
+
+    Using the full scene_id instead needs no per-source ID-shape
+    knowledge (unlike the old positional slice, or date-token extraction
+    like _extract_date_token()) and is unique across scenes by
+    construction, for both ID formats and any future source's ID shape.
+    Only non-filesystem-safe characters (anything but letters, digits,
+    underscore, hyphen) are replaced with underscore -- neither OPERA's
+    nor MPC's real ID formats contain any, so this is a no-op for both
+    in practice, kept only as a safety net.
+    """
+    return _UNSAFE_FILENAME_CHARS_RE.sub('_', scene_id)
+
+
 def combine_flood_dates(flood_data, date_index=-5):
     """
     Collapse same-date scenes into one flood layer per date, taking the
@@ -852,16 +888,37 @@ def combine_flood_dates_from_paths(scene_id_to_path, date_index=-5):
 
 def flood_data_3dstack_from_paths(scene_id_to_path, date_index=-5):
     """
-    combine_flood_dates_from_paths() + stack into one 3D array
-    (date, y, x) -- the disk-based, memory-bounded counterpart to
-    flood_data_3dstack(), for merge_floods_by_date() to use against
-    map_floods()'s exported-file self.flood_dict instead of an
-    in-memory array dict. Returns (dates, stack), same shape/contract
-    as flood_data_3dstack().
-    """
-    data_dict = combine_flood_dates_from_paths(scene_id_to_path, date_index=date_index)
+    Disk-based, memory-bounded counterpart to flood_data_3dstack(), for
+    merge_floods_by_date() to use against map_floods()'s exported-file
+    self.flood_dict instead of an in-memory array dict. Returns (dates,
+    stack), same shape/contract as flood_data_3dstack().
 
-    return list(data_dict.keys()), np.stack([
-        data_dict[key]
-        for key in data_dict
+    Does NOT go through combine_flood_dates_from_paths() + np.stack()
+    (that combine-then-stack pattern builds a dict holding EVERY date's
+    combined 2D array, then np.stack() allocates a second, same-total-size
+    3D array on top of it before the dict is freed -- transiently ~2x
+    the final stack's memory, and the dominant memory floor in
+    merge_floods_by_date() once read_scenes()'s own bounded read/reproject
+    residency was fixed separately). Instead, writes each date's combined
+    raster directly into a preallocated output array as it's computed --
+    only one date's per-scene rasters plus the single accumulating output
+    array are ever resident, never a second full-size copy.
+    """
+    paths_by_date = {}
+    for scene_id, path in scene_id_to_path.items():
+        date = _extract_date_token(scene_id, date_index)
+        paths_by_date.setdefault(date, []).append(path)
+
+    dates_list = sorted(paths_by_date)
+
+    with rasterio.open(paths_by_date[dates_list[0]][0]) as first:
+        shape = (len(dates_list), first.height, first.width)
+        dtype = first.dtypes[0]
+
+    floods_stacked = np.empty(shape, dtype=dtype)
+    for i, date in enumerate(dates_list):
+        floods_stacked[i] = np.maximum.reduce([
+            rasterio.open(path).read(1) for path in paths_by_date[date]
         ])
+
+    return dates_list, floods_stacked

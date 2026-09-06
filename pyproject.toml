@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autofloods"
-version = "0.1.0a25"
+version = "0.1.0a26"
 description = "Automated flood mapping at scale from Sentinel-1 SAR imagery"
 readme = "PYPI_README.md"
 license = { text = "MIT" }
@@ -35,7 +35,6 @@ dependencies = [
     "pystac==1.7.2",
     "pystac-client==0.6.1",
     "scikit-image==0.25.0",
-    "scikit-learn==1.5.2",
     "planetary-computer==1.0.0",
     "dask[array,dataframe]==2024.4.1",
     "requests==2.31.0",

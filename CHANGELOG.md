@@ -1,5 +1,95 @@
 # Changelog
 
+## 0.1.0a26
+
+**Correctness fix: per-scene flood raster filenames could collide for
+OPERA-sourced runs, causing `merge_floods_by_date()` to aggregate
+repeated copies of one scene instead of distinct dates.**
+`map_floods()` derived each scene's output filename from
+`scene_id.split('_')[4:]` -- a positional token slice that assumed an
+MPC-style compound scene ID. For an OPERA-style scene_id
+(`OPERA_PASS_{YYYYMMDD}`, only 3 underscore-separated tokens), index 4
+is past the end, so every scene in a run produced the exact same empty
+suffix and wrote to (and overwrote) the exact same output file. Since
+`merge_floods_by_date()`/`generate_number_of_scenes()` read these
+per-scene rasters back from disk (unconditional export since 0.1.0a19's
+streaming rewrite), an affected run's per-date merged stack and monthly
+aggregate would have held N copies of whichever scene was written last,
+not N distinct dates.
+
+This is live on the default path for **any OPERA-sourced run on
+0.1.0a21 through 0.1.0a25** (export became unconditional in that
+range). It was NOT live before 0.1.0a19's streaming rewrite (raster
+export was opt-in and merge worked from an in-memory dict, not
+re-parsed files) and was NOT live for MPC-sourced runs (MPC's much
+longer compound scene IDs happen to leave a distinct trailing token
+sequence, by luck of ID shape, not because the slicing logic was
+correct). Checked the published Bihar production record (2017-2025,
+198 tile-years, all OPERA-sourced) directly against this: it predates
+0.1.0a19 and used `export_raster=False` throughout, so per-scene
+rasters were never written and `merge_floods_by_date()` worked from the
+in-memory dict -- confirmed unaffected by exhaustively scanning the
+entire production output tree for per-scene `floodextent_*.tif` files
+(zero found anywhere, consistent with `export_raster=False`, not with
+the collision ever firing).
+
+Fixed by deriving the filename from the full scene_id, sanitized for
+filesystem safety (`utils.sanitize_scene_id_for_filename`), instead of
+a positional slice -- unique by construction for both OPERA's and MPC's
+real ID shapes, with no per-source special-casing. A fourth,
+independent occurrence of the same positional-slice bug was found and
+fixed in `autofloods.visualize._flood_scene_raster_path()` (used by
+`plot_scenes_and_floods()` to reload a scene's raster), which
+recomputed the same broken formula rather than reading it from
+`flood_dict`.
+
+**Fixed the real memory bottleneck in the bulk scene-read step**
+(`read_scenes()`, shared by both dry- and wet-season phases): it used
+to hold every scene's raw VV+VH arrays in memory at once before
+anything downstream consumed them, even though the reproject/accumulate
+loops downstream of it were already bounded by earlier fixes. Real
+profiling across 10 tile-years showed this peaking at 4.6-7.4GB
+(`read_scenes(dry)`) and 12.7-20.5GB (`prepare_wet_scenes()`). Rewrote
+it into a two-stage bounded pipeline (a read pool feeding a
+reproject-and-cache pool, each independently sized via `max_workers`/
+`reproject_max_workers`), writing each scene straight to a persistent
+per-(AOI, scene) disk cache and releasing it before the next read is
+submitted -- residency is now bounded by the worker-pool sizes, not by
+scene count, and a crashed run resumes from its cache for free. An
+earlier version of this rewrite had a real backpressure bug (reads
+could race ahead of the slower reproject stage and pile up an unbounded
+backlog, silently reproducing the same problem); caught via real
+before/after peak-memory measurement, not assumed, and fixed with
+explicit backlog capacity gating -- see the new
+`TestReadScenesBackpressure` regression test.
+
+**Fixed the transient 2x memory blowup in `merge_floods_by_date()`**:
+`flood_data_3dstack_from_paths()` used to build a dict holding every
+date's combined raster, then `np.stack()` a second, same-size 3D array
+on top of it before the dict was freed. Rewrote it to write each date's
+combined raster directly into a preallocated output array as it's
+computed, so only one date's per-scene rasters plus the single
+accumulating output are ever resident. Measured: this stage's peak
+dropped from ~5.0GB to ~2.7GB on a real 49-scene tile-year, matching
+the predicted ~2.40GB single-copy size closely.
+
+**Renamed** `map_floods()`'s `rel_slope_thd` parameter to `slope_thd`
+(deprecated alias kept, forwards with a `DeprecationWarning`) -- the
+value is compared as a flat absolute per-pixel slope cutoff in degrees,
+nothing normalized against a neighborhood/percentile/tile-wide
+reference, so the `rel_` prefix was a leftover misnomer.
+
+Removed the now-unused `scikit-learn` dependency (it was pinned solely
+for the since-removed `smoothen_slope()`'s patch-extraction call).
+
+Full test suite: 228 passing (16 new: the filename-collision
+regression and its `merge_floods_by_date()` consumer check, 4
+`sanitize_scene_id_for_filename()` unit tests, 4 new dry-season
+streaming tests including the backpressure regression, 2 new
+`flood_data_3dstack_from_paths()` correctness/memory-bound tests, plus
+fixture updates across existing tests for the new read/reproject
+concurrency contract).
+
 ## 0.1.0a25
 
 Four fixes to `autofloods.visualize`, found via actual rendered

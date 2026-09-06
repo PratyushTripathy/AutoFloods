@@ -9,6 +9,7 @@ data. No network access.
 """
 
 import datetime
+import tracemalloc
 
 import geopandas as gpd
 import numpy as np
@@ -81,6 +82,37 @@ class TestExtractDateToken:
     def test_raises_when_no_date_token_present(self):
         with pytest.raises(ValueError):
             utils._extract_date_token("no_date_here_at_all")
+
+
+class TestSanitizeSceneIdForFilename:
+    """
+    sanitize_scene_id_for_filename() replaced map_floods()'s old
+    scene_id.split('_')[4:] positional-slice suffix formula, which
+    silently collapsed every OPERA-style scene_id ("OPERA_PASS_{date}",
+    3 tokens) to an empty string -- see
+    tests/test_wet_season_streaming.py::TestMapFloodsOperaStyleSceneIdsFilenameCollision
+    for the end-to-end regression coverage of the actual bug this
+    caused. These are the function's own unit-level cases.
+    """
+
+    def test_opera_style_ids_are_distinct_and_nonempty(self):
+        ids = ['OPERA_PASS_20240701', 'OPERA_PASS_20240705', 'OPERA_PASS_20240710']
+        sanitized = [utils.sanitize_scene_id_for_filename(i) for i in ids]
+        assert all(s for s in sanitized)  # none empty
+        assert len(set(sanitized)) == len(ids)  # all distinct
+
+    def test_mpc_style_ids_are_distinct_and_unchanged(self):
+        a = 'S1A_IW_GRDH_1SDV_20240115T120000_20240115T120025_000001_000001_rtc'
+        b = 'S1A_IW_GRDH_1SDV_20240116T120000_20240116T120025_000002_000002_rtc'
+        assert utils.sanitize_scene_id_for_filename(a) == a
+        assert utils.sanitize_scene_id_for_filename(b) == b
+        assert a != b
+
+    def test_replaces_filesystem_unsafe_characters(self):
+        assert utils.sanitize_scene_id_for_filename('S1A/IW:GRDH 20240115') == 'S1A_IW_GRDH_20240115'
+
+    def test_alnum_underscore_hyphen_pass_through_unchanged(self):
+        assert utils.sanitize_scene_id_for_filename('abc-123_XYZ') == 'abc-123_XYZ'
 
 
 class TestCombineFloodDates:
@@ -177,6 +209,103 @@ class TestCombineFloodDatesFromPaths:
 
         assert dates_from_paths == dates_in_memory
         np.testing.assert_array_equal(stack_from_paths, stack_in_memory)
+
+    def test_realistic_multi_date_multi_scene_bit_identical(self, tmp_path):
+        """
+        A larger, more realistic case than the 2-date smoke tests above:
+        20 dates, some with 2 same-day scenes (multi-track coverage,
+        exercising the np.maximum.reduce path per date), confirming
+        flood_data_3dstack_from_paths()'s streaming
+        preallocate-and-fill implementation is bit-identical to the
+        in-memory flood_data_3dstack() reference -- not just "runs
+        without crashing".
+        """
+        rng = np.random.default_rng(42)
+        in_memory_dict = {}
+        scene_id_to_path = {}
+        for day in range(1, 21):
+            date_str = f'202407{day:02d}'
+            n_scenes_this_date = 2 if day % 5 == 0 else 1
+            for track in range(n_scenes_this_date):
+                scene_id = f'OPERA_PASS_{date_str}_T{track}'
+                arr = rng.integers(0, 4, size=(30, 40)).astype('uint8')
+                in_memory_dict[scene_id] = xr.DataArray(arr)
+                scene_id_to_path[scene_id] = self._write(tmp_path, f'{scene_id}.tif', arr)
+
+        dates_in_memory, stack_in_memory = utils.flood_data_3dstack(in_memory_dict, date_index=-2)
+        dates_from_paths, stack_from_paths = utils.flood_data_3dstack_from_paths(
+            scene_id_to_path, date_index=-2,
+        )
+
+        assert dates_from_paths == dates_in_memory
+        assert len(dates_from_paths) == 20
+        np.testing.assert_array_equal(stack_from_paths, stack_in_memory)
+
+
+class TestFloodData3DStackFromPathsBoundedMemory:
+    """
+    Regression coverage for the real memory floor found via production-
+    scale measurement (2026-09-06): the OLD implementation of
+    flood_data_3dstack_from_paths() went through
+    combine_flood_dates_from_paths() (building a dict holding EVERY
+    date's combined 2D array) and then np.stack()'d that dict's values
+    into a NEW, same-total-size 3D array -- so for a brief window both
+    the fully-populated dict AND the freshly stacked array were resident
+    at once, roughly 2x the final stack's own size. This showed up as a
+    ~5GB memory floor in merge_floods_by_date() that was completely
+    unaffected by turning down read_scenes()'s read/reproject
+    concurrency (that stage takes no concurrency parameter at all).
+
+    The fix writes each date's combined raster directly into a
+    preallocated output array as it's computed, so only one date's
+    per-scene rasters plus the single accumulating output array are
+    ever resident -- never a second full-size copy. This test measures
+    that directly via tracemalloc and asserts the new implementation's
+    peak is well under what the old combine-then-stack pattern would
+    have used for the same input, by literally re-running the old
+    pattern (using the still-present, unchanged combine_flood_dates_from_paths())
+    against the same files and comparing peaks.
+    """
+
+    def _write(self, tmp_path, name, array):
+        path = tmp_path / name
+        utils.export_xarray(xr.DataArray(array.astype('float64'), dims=('y', 'x')), str(path))
+        return str(path)
+
+    def _old_combine_then_stack(self, scene_id_to_path, date_index):
+        data_dict = utils.combine_flood_dates_from_paths(scene_id_to_path, date_index=date_index)
+        return list(data_dict.keys()), np.stack([data_dict[key] for key in data_dict])
+
+    def test_streaming_peak_well_under_old_combine_then_stack_peak(self, tmp_path):
+        n_dates = 40
+        scene_id_to_path = {}
+        for day in range(n_dates):
+            scene_id = f'OPERA_PASS_2024{day:04d}'
+            # large enough per-date array that a real 2x transient
+            # blowup is visible above measurement noise
+            arr = np.full((400, 400), day % 4, dtype='float64')
+            scene_id_to_path[scene_id] = self._write(tmp_path, f'{scene_id}.tif', arr)
+
+        tracemalloc.start()
+        _, old_stack = self._old_combine_then_stack(scene_id_to_path, date_index=-2)
+        _, old_peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        del old_stack
+
+        tracemalloc.start()
+        _, new_stack = utils.flood_data_3dstack_from_paths(scene_id_to_path, date_index=-2)
+        _, new_peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        # old combine-then-stack transiently holds ~2x the final
+        # stack's size (the dict of all dates + the freshly-np.stack()'d
+        # array); the streaming version should land close to 1x. A
+        # generous 0.7x threshold leaves margin for measurement noise
+        # while still failing decisively against the unbounded pattern.
+        assert new_peak < 0.7 * old_peak, (
+            f'expected streaming peak well under the old combine-then-stack '
+            f'peak, got new={new_peak} old={old_peak}'
+        )
 
 
 class TestDefaultMaxWorkers:

@@ -21,6 +21,7 @@ monkeypatched with small deterministic synthetic arrays, but detection
 merge/gap-count math run for real.
 """
 import os
+import types
 
 import numpy as np
 import pytest
@@ -119,6 +120,19 @@ def _write_dummy_slope(fm):
     utils.export_xarray(slope, slope_path)
 
 
+def _write_steep_slope(fm, steep_degrees=30.0, steep_pixel=(1, 1)):
+    """A slope raster that's flat (0 degrees) everywhere except one
+    interior pixel (avoiding the grid's outer row/col -- see SCENE_DEFS'
+    comment on the half-pixel reproject_match edge effect) set to
+    `steep_degrees`, for tests that need slope-masking to actually
+    do something (unlike _write_dummy_slope's all-flat raster)."""
+    values = np.zeros((1, SIZE, SIZE))
+    values[0, steep_pixel[0], steep_pixel[1]] = steep_degrees
+    slope = xr.DataArray(values, dims=('band', 'y', 'x'), coords={'y': Y, 'x': X}).rio.write_crs('EPSG:32645')
+    slope_path = os.path.join(fm.slope_dir, autofloods.SLOPE_OUTFILE).replace('_id.nc', f'_{TILE_ID}.nc')
+    utils.export_xarray(slope, slope_path)
+
+
 def _make_flood_mapper(tmp_path):
     return autofloods.flood_mapper(
         grid_shapefile=GRID_PATH,
@@ -139,8 +153,13 @@ def _wire_wet_scene_mocks(fm, monkeypatch, clip_call_log=None):
     clip_xarray_using_id() call (used to verify map_floods() re-runs
     don't re-trigger reprojection)."""
     scene_ids = list(SCENE_DEFS.keys())
+    # real STAC search results are Item objects with a .id attribute
+    # (scene_id), not plain strings -- read_scenes()'s streaming path
+    # needs a real item to re-look-up for a scene shared across AOIs,
+    # so the mock must carry .id like the real thing does.
+    fake_items = [types.SimpleNamespace(id=scene_id) for scene_id in scene_ids]
 
-    monkeypatch.setattr(fm.source, 'search_sentinel1', lambda **k: scene_ids)
+    monkeypatch.setattr(fm.source, 'search_sentinel1', lambda **k: fake_items)
     monkeypatch.setattr(
         utils, 'seggregate_sentinel_search',
         lambda aoi_list, search_items: (
@@ -151,7 +170,7 @@ def _wire_wet_scene_mocks(fm, monkeypatch, clip_call_log=None):
     monkeypatch.setattr(
         autofloods.preprocessing, 'read_sentinel1_stac',
         lambda item, source, overview_level, bbox=None: (
-            item, {'vv_ds': f'{item}::vv', 'vh_ds': f'{item}::vh'},
+            item.id, {'vv_ds': f'{item.id}::vv', 'vh_ds': f'{item.id}::vh'},
         ),
     )
 
@@ -331,6 +350,70 @@ class TestValidCountNormalizesMonthlySum:
         # docstring.
 
 
+class TestMapFloodsSlopeThdRename:
+    """map_floods()'s rel_slope_thd parameter was renamed to slope_thd
+    (0.1.0a26) -- the value is a flat absolute per-pixel slope cutoff
+    in degrees, nothing relative/normalized. rel_slope_thd is kept as a
+    deprecated alias so existing scripts/configs keep working."""
+
+    def test_slope_thd_masks_steep_pixel(self, tmp_path, monkeypatch):
+        fm = _make_flood_mapper(tmp_path)
+        fm.mean_std_by_aoi = {TILE_ID: _make_baseline()}
+        _wire_wet_scene_mocks(fm, monkeypatch)
+        _write_steep_slope(fm, steep_degrees=30.0, steep_pixel=(1, 1))
+        fm.prepare_wet_scenes()
+
+        # 20240717 scene has a high-confidence (class 3) flood at (1, 0)
+        # -- unaffected by the steep pixel at (1, 1) -- and nothing at
+        # (1, 1) itself, so directly assert the steep pixel is forced
+        # to 0 (masked) with a threshold below its slope, and NOT
+        # masked with a threshold above it.
+        fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, slope_thd=20, export_vector=False, export_maps=False)
+        masked = xr.load_dataarray(
+            fm.flood_dict[TILE_ID]['S1A_IW_GRDH_1SDV_20240717T000000_20240717T000025_000004_000004_rtc'],
+            engine='rasterio',
+        ).squeeze('band', drop=True)
+        assert masked.values[1, 1] == 0
+
+        fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, slope_thd=40, export_vector=False, export_maps=False)
+        unmasked = xr.load_dataarray(
+            fm.flood_dict[TILE_ID]['S1A_IW_GRDH_1SDV_20240717T000000_20240717T000025_000004_000004_rtc'],
+            engine='rasterio',
+        ).squeeze('band', drop=True)
+        # (1, 1) is 0 (not flooded) in the underlying classification
+        # regardless of masking (see SCENE_DEFS), so confirm masking
+        # actually ran differently by checking the flooded pixel (1, 0)
+        # -- still correctly classified, unaffected by the slope at (1, 1).
+        assert unmasked.values[1, 0] == 3
+
+    def test_rel_slope_thd_alias_forwards_and_warns(self, tmp_path, monkeypatch):
+        fm = _make_flood_mapper(tmp_path)
+        fm.mean_std_by_aoi = {TILE_ID: _make_baseline()}
+        _wire_wet_scene_mocks(fm, monkeypatch)
+        _write_steep_slope(fm, steep_degrees=30.0, steep_pixel=(1, 1))
+        fm.prepare_wet_scenes()
+
+        with pytest.warns(DeprecationWarning, match='rel_slope_thd'):
+            fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, rel_slope_thd=20, export_vector=False, export_maps=False)
+
+        masked = xr.load_dataarray(
+            fm.flood_dict[TILE_ID]['S1A_IW_GRDH_1SDV_20240717T000000_20240717T000025_000004_000004_rtc'],
+            engine='rasterio',
+        ).squeeze('band', drop=True)
+        assert masked.values[1, 1] == 0  # rel_slope_thd=20 still masks the 30-degree pixel
+
+    def test_slope_thd_alone_does_not_warn(self, tmp_path, monkeypatch, recwarn):
+        fm = _make_flood_mapper(tmp_path)
+        fm.mean_std_by_aoi = {TILE_ID: _make_baseline()}
+        _wire_wet_scene_mocks(fm, monkeypatch)
+        _write_dummy_slope(fm)
+        fm.prepare_wet_scenes()
+
+        fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, slope_thd=15, export_vector=False, export_maps=False)
+
+        assert not any(issubclass(w.category, DeprecationWarning) for w in recwarn.list)
+
+
 class TestMapFloodsSmoothing:
     def test_smooth_false_is_default_and_unchanged(self, tmp_path, monkeypatch):
         fm = _make_flood_mapper(tmp_path)
@@ -442,3 +525,142 @@ class TestMapFloodsExportMapsAndVector:
 
         outdir = os.path.join(fm.output_base, 'flood_vector')
         assert len(os.listdir(outdir)) == 1
+
+
+# OPERA-style scene_ids ("OPERA_PASS_{YYYYMMDD}", 3 underscore-separated
+# tokens) -- unlike SCENE_DEFS above (MPC-style, 9+ tokens), these are
+# the exact shape that silently collided under the old
+# scene_id.split('_')[4:] suffix formula (index 4 is past the end of a
+# 3-token id, so every scene produced the same empty suffix and
+# overwrote the same output file). See sanitize_scene_id_for_filename()
+# in autofloods/utils/__init__.py, the fix for this. Distinct per-scene
+# values (not just distinct dates) so a content-based assertion, not
+# just distinct paths, can confirm each scene's own file holds its own
+# classification.
+OPERA_SCENE_DEFS = {
+    'OPERA_PASS_20240701': {  # high-confidence flood at (0,0)
+        'vv': [[0.5, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        'vh': [[0.5, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+    },
+    'OPERA_PASS_20240705': {  # no flood anywhere
+        'vv': [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+        'vh': [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0], [1.0, 1.0, 1.0]],
+    },
+    'OPERA_PASS_20240710': {  # high-confidence flood at (1,1)
+        'vv': [[1.0, 1.0, 1.0], [1.0, 0.5, 1.0], [1.0, 1.0, 1.0]],
+        'vh': [[1.0, 1.0, 1.0], [1.0, 0.5, 1.0], [1.0, 1.0, 1.0]],
+    },
+}
+
+
+def _wire_opera_style_wet_scene_mocks(fm, monkeypatch):
+    """Same monkeypatch shape as _wire_wet_scene_mocks(), against
+    OPERA_SCENE_DEFS's short, collision-prone scene_ids instead of
+    SCENE_DEFS's MPC-style ones."""
+    scene_ids = list(OPERA_SCENE_DEFS.keys())
+    fake_items = [types.SimpleNamespace(id=scene_id) for scene_id in scene_ids]
+
+    monkeypatch.setattr(fm.source, 'search_sentinel1', lambda **k: fake_items)
+    monkeypatch.setattr(
+        utils, 'seggregate_sentinel_search',
+        lambda aoi_list, search_items: (
+            {TILE_ID: scene_ids},
+            {scene_id: [TILE_ID] for scene_id in scene_ids},
+        ),
+    )
+    monkeypatch.setattr(
+        autofloods.preprocessing, 'read_sentinel1_stac',
+        lambda item, source, overview_level, bbox=None: (
+            item.id, {'vv_ds': f'{item.id}::vv', 'vh_ds': f'{item.id}::vh'},
+        ),
+    )
+
+    def _fake_clip(data_xarray, grid_shapefile_path, aoi_id, ref_xarray, cell_size, buffer=None):
+        scene_id, band = data_xarray.split('::')
+        return _make_scene_dataarray(OPERA_SCENE_DEFS[scene_id][band])
+
+    monkeypatch.setattr(autofloods.preprocessing, 'clip_xarray_using_id', _fake_clip)
+
+
+class TestMapFloodsOperaStyleSceneIdsFilenameCollision:
+    """
+    Regression coverage for the real bug found via production-record
+    investigation (2026-09-06): map_floods()'s per-scene output
+    filename used to derive its suffix from
+    scene_id.split('_')[4:], which is empty for a 3-token OPERA-style
+    scene_id -- every scene in a run wrote to (and overwrote) the exact
+    same output path. Dormant in the published Bihar record only
+    because that run used export_raster=False; live on the current
+    default (unconditional export) streaming path for any OPERA-sourced
+    run. Fixed via sanitize_scene_id_for_filename() (full scene_id,
+    sanitized, not a positional slice).
+    """
+
+    def test_one_distinct_file_per_opera_style_scene_not_one_total(self, tmp_path, monkeypatch):
+        fm = _make_flood_mapper(tmp_path)
+        fm.mean_std_by_aoi = {TILE_ID: _make_baseline()}
+        _wire_opera_style_wet_scene_mocks(fm, monkeypatch)
+        _write_dummy_slope(fm)
+
+        fm.prepare_wet_scenes()
+        fm.map_floods(vv_thd=-2.5, vh_thd=-2.5)
+
+        paths = fm.flood_dict[TILE_ID]
+        assert len(paths) == len(OPERA_SCENE_DEFS)
+
+        # the actual bug: not just distinct dict values, but distinct
+        # real files on disk -- the old formula produced the same path
+        # for every entry, so this dict would have collapsed to one
+        # scene_id -> path pair, or (as here) len(paths) real dict
+        # entries all pointing at one shared, repeatedly-overwritten file.
+        distinct_paths = set(paths.values())
+        assert len(distinct_paths) == len(OPERA_SCENE_DEFS), (
+            f'expected one distinct output path per scene, got {len(distinct_paths)} '
+            f'distinct path(s) for {len(paths)} scene(s): {paths}'
+        )
+        for path in distinct_paths:
+            assert os.path.exists(path)
+
+        flood_raster_dir = os.path.join(fm.output_base, 'flood_raster')
+        on_disk = [f for f in os.listdir(flood_raster_dir) if f.startswith('floodextent_')]
+        assert len(on_disk) == len(OPERA_SCENE_DEFS)
+
+        # content-level check, not just path-count: each scene's own
+        # file holds ITS OWN classification, not a copy of whichever
+        # scene happened to be written last (which is exactly what the
+        # old collision produced -- one file holding only the final
+        # scene's data, read back identically for every scene_id key).
+        flooded_pixel_by_scene = {
+            'OPERA_PASS_20240701': (0, 0),
+            'OPERA_PASS_20240710': (1, 1),
+        }
+        for scene_id, pixel in flooded_pixel_by_scene.items():
+            with rasterio.open(paths[scene_id]) as ds:
+                arr = ds.read(1)
+            assert arr[pixel] == 3, f'{scene_id} should be high-confidence-flooded at {pixel}'
+        with rasterio.open(paths['OPERA_PASS_20240705']) as ds:
+            arr = ds.read(1)
+        assert (arr == 0).all(), 'OPERA_PASS_20240705 has no flood anywhere and should read all-zero'
+
+    def test_merge_by_date_sees_all_opera_style_scenes_not_one_repeated(self, tmp_path, monkeypatch):
+        """
+        merge_floods_by_date() reads flood_dict's (now-distinct) paths
+        via flood_data_3dstack_from_paths() -- confirms that consumer
+        resolves correctly with the new naming: 3 real dates, each with
+        its own scene's classification, not 3 copies of one collided
+        file's content.
+        """
+        fm = _make_flood_mapper(tmp_path)
+        fm.mean_std_by_aoi = {TILE_ID: _make_baseline()}
+        _wire_opera_style_wet_scene_mocks(fm, monkeypatch)
+        _write_dummy_slope(fm)
+
+        fm.prepare_wet_scenes()
+        fm.map_floods(vv_thd=-2.5, vh_thd=-2.5)
+        fm.merge_floods_by_date()
+
+        stack = fm.flood_by_date[TILE_ID]
+        assert sorted(stack.date.values.tolist()) == ['20240701', '20240705', '20240710']
+        assert stack.sel(date='20240701').values[0, 0] == 3
+        assert stack.sel(date='20240710').values[1, 1] == 3
+        assert (stack.sel(date='20240705').values == 0).all()

@@ -111,10 +111,20 @@ def run_one_aoi(cfg, aoi_id):
                            reproject_max_workers=reproject_max_workers)
     print(f'[{aoi_id}] wet scenes: {sum(len(v) for v in fm.wet_scene_paths.values())}', flush=True)
 
+    # slope_thd is the current config key (flat absolute per-pixel
+    # slope cutoff in degrees -- see flood_mapper.map_floods()'s
+    # docstring for why it's no longer called rel_slope_thd). Existing
+    # configs (e.g. every scripts/configs/bihar_opera/*.yaml) still use
+    # the old rel_slope_thd key -- read as a fallback here, passed
+    # through as slope_thd= (not rel_slope_thd=) so a real batch run
+    # over ~200 such configs doesn't spam a DeprecationWarning per tile;
+    # that warning is for direct Python API callers passing the old
+    # kwarg by hand, not this config-key compatibility mapping.
+    slope_thd = detection_cfg.get('slope_thd', detection_cfg.get('rel_slope_thd', 15))
     fm.map_floods(
         vv_thd=detection_cfg.get('vv_thd', -3),
         vh_thd=detection_cfg.get('vh_thd', -3),
-        rel_slope_thd=detection_cfg.get('rel_slope_thd', 20),
+        slope_thd=slope_thd,
         export_vector=False, export_maps=False,
     )
     fm.merge_floods_by_date(export_raster=True)

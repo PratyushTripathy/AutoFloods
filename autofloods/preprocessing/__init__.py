@@ -366,6 +366,98 @@ def compute_dry_baseline_stats(clipped_dict, grid_shapefile_path, id, max_worker
         'grid_ref': grid_ref,
     }
 
+
+def compute_dry_baseline_stats_from_paths(path_dict, max_workers=None):
+    """
+    Same Welford's-algorithm fold as compute_dry_baseline_stats(), but
+    reading each scene from a persistent per-scene disk cache
+    (flood_mapper.read_scenes()'s default streaming path -- one file per
+    scene, band=['vv_ds', 'vh_ds'], already reprojected+clipped onto
+    AOI `id`'s final grid and nodata-masked at cache-write time) instead
+    of aligning an in-memory dict of arrays. No separate align step is
+    needed here -- read_scenes() already put each cached scene on the
+    correct grid via the same clip_xarray_using_id() call
+    compute_dry_baseline_stats()'s own align step uses, so loading is
+    the only per-scene work before folding. The nodata mask is
+    re-applied anyway (harmless/idempotent on already-masked data) to
+    keep this function's fold logic identical to the in-memory version,
+    rather than relying on cache-write-time masking alone.
+
+    Bounded sliding window, same pattern as compute_dry_baseline_stats():
+    only the running accumulators plus whichever cached scenes are
+    concurrently being loaded (bounded by max_workers) are ever resident
+    at once.
+
+    Parameters
+    ----------
+    path_dict : dict[str, str]
+        {scene_id: path to that scene's cached .nc}.
+    max_workers : int or None
+        Thread pool size for concurrent per-scene cache loads. None
+        (default) uses utils.default_max_workers().
+
+    Returns
+    -------
+    Same shape as compute_dry_baseline_stats(): dict with 'vv', 'vh'
+    (each {'mean':.., 'std':..}), and 'grid_ref'.
+    """
+    if max_workers is None:
+        max_workers = default_max_workers()
+
+    paths = list(path_dict.values())
+
+    def _load_one(path):
+        scene = xr.load_dataarray(path)
+        return {'vv_ds': scene.sel(band='vv_ds'), 'vh_ds': scene.sel(band='vh_ds')}
+
+    vv_state = None
+    vh_state = None
+    grid_ref = None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        remaining = iter(paths)
+        in_flight = set()
+        for path in itertools.islice(remaining, max_workers):
+            in_flight.add(executor.submit(_load_one, path))
+
+        while in_flight:
+            done, in_flight = concurrent.futures.wait(
+                in_flight, return_when=concurrent.futures.FIRST_COMPLETED
+            )
+            for future in done:
+                aligned = future.result()
+                vv = aligned['vv_ds'].where(aligned['vv_ds'] < _NODATA_SENTINEL_THRESHOLD, np.nan)
+                vh = aligned['vh_ds'].where(aligned['vh_ds'] < _NODATA_SENTINEL_THRESHOLD, np.nan)
+
+                if 'band' in vv.dims:
+                    vv = vv.squeeze('band', drop=True)
+                if 'band' in vh.dims:
+                    vh = vh.squeeze('band', drop=True)
+
+                if grid_ref is None:
+                    grid_ref = vv.expand_dims(band=[0])
+
+                vv_state = _welford_init(vv) if vv_state is None else vv_state
+                vh_state = _welford_init(vh) if vh_state is None else vh_state
+                vv_state = _welford_update(vv_state, vv)
+                vh_state = _welford_update(vh_state, vh)
+                del aligned, vv, vh
+                gc.collect()
+
+                next_path = next(remaining, None)
+                if next_path is not None:
+                    in_flight.add(executor.submit(_load_one, next_path))
+
+    vv_mean, vv_std = _welford_finalize(vv_state)
+    vh_mean, vh_std = _welford_finalize(vh_state)
+
+    return {
+        'vv': {'mean': vv_mean, 'std': vv_std},
+        'vh': {'mean': vh_mean, 'std': vh_std},
+        'grid_ref': grid_ref,
+    }
+
+
 def clip_xarray_using_id(data_xarray, grid_shapefile_path, aoi_id, ref_xarray, buffer=None, slope=False, cell_size=30):
     """
     Reproject `data_xarray` to AOI `aoi_id`'s UTM zone and resample it
@@ -473,12 +565,14 @@ def compute_slope(dem_xarray, grid_shapefile_path, aoi_id, ref_xarray, buffer=No
     (33x33 kernel), this required ~101 GB, an out-of-memory crash
     confirmed independent of (and much larger than) the dry-season-
     baseline and DEM-read memory issues fixed the same night. See
-    CLAUDE.md's Future To-Dos for the rel_slope_thd=20 tuning caveat
-    this leaves open: that default was never explicitly documented as
-    tuned for smoothed vs. raw slope in the current (non-deprecated)
-    code path, but the deprecated autofloods.mapfloods.map_floods()
-    free function's docstring does describe the threshold as applying
-    to "smoothed relative slope" -- flagged, not resolved here.
+    CLAUDE.md's Future To-Dos for the slope_thd tuning caveat this
+    leaves open: map_floods()'s default (15 degrees, matching Global
+    Flood Mapper -- see that method's own docstring) was tuned against
+    GFM's own (smoothed) slope computation, not necessarily validated
+    against this codebase's raw/unsmoothed slope, and the deprecated
+    autofloods.mapfloods.map_floods() free function's docstring does
+    describe the threshold as applying to "smoothed relative slope" --
+    flagged, not resolved here.
 
     cell_size is the same explicit, forced grid resolution used
     throughout this module (see clip_xarray_using_id's docstring).

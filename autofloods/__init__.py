@@ -21,6 +21,7 @@ import concurrent.futures
 import gc
 import itertools
 import logging
+import warnings
 import xarray as xr
 import numpy as np
 import rasterio
@@ -77,12 +78,12 @@ class flood_mapper():
         -> generate_number_of_scenes() -> monthly_sum()
 
     Each stage's output is cached to disk under `output_dir` (mean/std
-    and wet-season scenes as NetCDF, everything else as GeoTIFF/COG)
+    and dry/wet-season scenes as NetCDF, everything else as GeoTIFF/COG)
     and reloaded rather than recomputed on a later run for the same
     tile/date range -- see is_fully_processed()/expected_monthly_outfile()
     to check a tile's completion status upfront, and
     already_processed_aoi_ids (set in generate_defaults()) for the
-    per-baseline resume mechanism. prepare_wet_scenes()'s per-scene
+    per-baseline resume mechanism. read_scenes()'s per-(AOI, scene)
     cache (self.wet_scene_paths) means map_floods() can be re-run any
     number of times with different thresholds without re-triggering
     prepare_wet_scenes()'s read/reproject work.
@@ -169,29 +170,35 @@ class flood_mapper():
                                           derived from AOI geometry alone.
         keep_intermediate_in_memory     : bool
                                           Default False -- the memory-conservative choice.
-                                          Large per-tile intermediates that are only needed
-                                          transiently (self.s1_dry_dict, the raw dry-season
-                                          scenes; self.slope, the per-tile slope raster) are
-                                          explicitly deleted (`del` + `gc.collect()`) as soon
-                                          as the pipeline step that needs them finishes, and
+                                          read_scenes() never builds a full in-memory dict of
+                                          every scene at all: it reads each dry/wet-season
+                                          scene with bounded concurrency, reprojects it per AOI,
+                                          writes it to a persistent per-(AOI, scene) disk cache
+                                          (self.dry_scenes_cache_dir/self.wet_scenes_cache_dir),
+                                          and discards it -- never more than max_workers raw
+                                          scenes resident at once, regardless of how many
+                                          scenes a tile-year has. self.slope (the per-tile
+                                          slope raster) is likewise explicitly deleted (`del` +
+                                          `gc.collect()`) once prepare_slope() finishes, and
                                           downstream steps that want that data again (e.g.
                                           map_floods()'s slope mask) re-read it from disk
-                                          instead. This trades a little repeated I/O for a
-                                          much lower memory ceiling -- the difference between
-                                          crashing and not crashing on a memory-constrained
-                                          environment (e.g. Google Colab's ~12-13GB), where
-                                          this default is the safe choice.
+                                          instead. This is the difference between crashing and
+                                          not crashing on a memory-constrained environment
+                                          (e.g. Google Colab's ~12-13GB), where this default is
+                                          the safe choice.
 
-                                          Set to True to keep those intermediates resident
-                                          instead: nothing is deleted, and downstream steps
-                                          check the in-memory attribute first before falling
-                                          back to a disk read. This trades memory for reduced
-                                          repeated disk I/O -- recommended only on a machine
-                                          with ample RAM (a dedicated HPC node, a local dev
-                                          machine), where the extra few hundred MB per tile
-                                          this holds onto is not a concern. Do not use this on
-                                          a constrained environment like Colab -- it is the
-                                          opposite of what those environments need.
+                                          Set to True to keep every scene resident in memory
+                                          instead (self.s1_dry_dict/self.s1_wet_dict, the
+                                          original bulk-read behavior), and self.slope
+                                          resident too: nothing is deleted, and downstream
+                                          steps check the in-memory attribute first before
+                                          falling back to a disk read. This trades memory for
+                                          reduced repeated disk I/O -- recommended only on a
+                                          machine with ample RAM (a dedicated HPC node, a local
+                                          dev machine), where the extra memory this holds onto
+                                          is not a concern. Do not use this on a constrained
+                                          environment like Colab -- it is the opposite of what
+                                          those environments need.
 
         Sets aoi_union/aoi_list (combined and per-AOI search bboxes), normalizes
         dry_years to a contiguous range, and populates already_processed_aoi_ids
@@ -292,6 +299,7 @@ class flood_mapper():
         self.folders_to_create = [
             self.output_base,
             os.path.join(self.output_base, 'mean_std'),
+            os.path.join(self.output_base, 'dry_scenes_cache'),
             os.path.join(self.output_base, 'wet_scenes_cache'),
             os.path.join(self.output_base, 'flood_raster'),
             os.path.join(self.output_base, 'flood_raster', 'monthlyadded'),
@@ -336,6 +344,7 @@ class flood_mapper():
         self.wet_aoi_scene_json_file = json_outfile.replace('.json', f'{dry_year_begin}_{dry_year_end}_wet_aoi_scene.json')
         self.wet_scene_aoi_json_file = json_outfile.replace('.json', f'{dry_year_begin}_{dry_year_end}_wet_scene_aoi.json')
         self.nc_outfile = nc_outfile.replace('aoi_', f'{dry_year_begin}_{dry_year_end}_aoi_')
+        self.dry_scenes_cache_dir = os.path.join(self.output_base, 'dry_scenes_cache')
         self.wet_scenes_cache_dir = os.path.join(self.output_base, 'wet_scenes_cache')
 
         # An AOI counts as "already processed" (dry-season baseline can be
@@ -624,61 +633,302 @@ class flood_mapper():
         ys = [c[1] for c in coords]
         return (min(xs), min(ys), max(xs), max(ys))
 
-    def read_scenes(self, dry_wet='dry', overview_level=3, max_workers=6):
+    def read_scenes(self, dry_wet='dry', overview_level=3, max_workers=6, reproject_max_workers=None):
         """
         Download+read every scene found by get_s1_items() (self.dry_s1_scenes
-        or self.wet_s1_scenes) via `self.source`, concurrently. Sets
-        self.s1_dry_dict/self.s1_wet_dict: {scene_id: {'vv_ds':..., 'vh_ds':...}},
-        still in native CRS (see preprocessing.read_sentinel1_stac).
+        or self.wet_s1_scenes) via `self.source`, concurrently.
         `overview_level` is source-dependent -- MPCSource's COGs have an
         internal pyramid (lower = higher resolution); OPERASource ignores
         it (no pyramid, always native 30m). `max_workers` default (6) is
         a safe concurrency level against OPERASource -- see
         autofloods.sources's module docstring for source-specific guidance.
+        `reproject_max_workers` (new) bounds concurrent per-scene
+        reprojection; None (default) uses utils.default_max_workers().
+
+        keep_intermediate_in_memory=False (default): bounded two-stage
+        pipeline -- reads are bounded by max_workers, and as each scene's
+        raw read completes, it is immediately reprojected+clipped onto
+        every AOI that needs it (bounded by reproject_max_workers),
+        written to a persistent per-(AOI, scene) disk cache
+        (self.dry_scenes_cache_dir/self.wet_scenes_cache_dir), and
+        discarded -- never holding more than max_workers raw scenes (plus
+        reproject_max_workers in-flight reprojections) resident at once,
+        the same bounded-sliding-window pattern already used by
+        preprocessing.compute_dry_baseline_stats()/utils.download_nasadem()/
+        prepare_wet_scenes()'s own cache. A scene needed by more than one
+        AOI in this run (rare -- production runs one AOI per job) is read
+        from the network exactly once and fanned out, not re-read per
+        AOI. The cache is resumable: a scene already cached (from an
+        earlier run, or one interrupted mid-tile) is loaded from disk
+        rather than re-read/re-reprojected. Sets self.dry_scene_paths/
+        self.wet_scene_paths: {aoi_id: {scene_id: path to that (AOI,
+        scene)'s cached .nc}}, and a private
+        self._dry_scene_valid_count_by_aoi/self._wet_scene_valid_count_by_aoi:
+        {aoi_id: 2D numpy int array}, a per-pixel count of scenes with a
+        VALID (non-NaN) observation, folded in one scene at a time --
+        generate_number_of_scenes() reads the wet one directly.
+
+        keep_intermediate_in_memory=True: unchanged, original behavior --
+        bulk concurrent read into self.s1_dry_dict/self.s1_wet_dict:
+        {scene_id: {'vv_ds':..., 'vh_ds':...}}, still in native CRS (see
+        preprocessing.read_sentinel1_stac), every scene resident at once.
+        For wet, prepare_wet_scenes() still separately builds
+        self.wet_scene_paths from this bulk dict afterward, exactly as
+        before -- map_floods() always reads scene_paths (file paths),
+        regardless of this flag.
 
         Passes this run's combined AOI bounds (_aoi_union_bounds_4326())
-        through to each read as a windowed-read hint -- MPCSource uses it
-        to fetch only the intersecting portion of its COG assets over the
-        network instead of the full scene; OPERASource ignores it.
+        through to each raw read as a windowed-read hint -- MPCSource uses
+        it to fetch only the intersecting portion of its COG assets over
+        the network instead of the full scene; OPERASource ignores it.
         """
         if dry_wet == 'dry':
             s1_scenes = self.dry_s1_scenes
+            aoi_scene_dict = self.dry_aoi_scene_dict
         elif dry_wet == 'wet':
             s1_scenes = self.wet_s1_scenes
+            aoi_scene_dict = self.wet_aoi_scene_dict
 
         aoi_bbox_4326 = self._aoi_union_bounds_4326()
 
-        # read and reproject the images concurrently. This is I/O-bound
-        # (network reads of remote COGs), not CPU-bound, so a thread pool
-        # is used rather than a process pool: threads release the GIL
-        # during I/O, and avoid the pickling/IPC cost of shipping large
-        # xarray/rasterio objects back across process boundaries. Each
-        # individual read already has its own bounded timeout and retry
-        # (see autofloods.utils.open_rasterio_with_retry); this adds
-        # concurrency across scenes on top of that. max_workers is kept
-        # modest (not unbounded) to avoid hammering the data source with
-        # too many simultaneous requests.
-        s1_combined = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(
-                    preprocessing.read_sentinel1_stac, item, self.source, overview_level, aoi_bbox_4326,
-                )
-                for item in s1_scenes
+        if self.keep_intermediate_in_memory:
+            # Original bulk behavior, unchanged. This is I/O-bound
+            # (network reads of remote COGs), not CPU-bound, so a thread
+            # pool is used rather than a process pool: threads release
+            # the GIL during I/O, and avoid the pickling/IPC cost of
+            # shipping large xarray/rasterio objects back across process
+            # boundaries. Each individual read already has its own
+            # bounded timeout and retry (see
+            # autofloods.utils.open_rasterio_with_retry); this adds
+            # concurrency across scenes on top of that. max_workers is
+            # kept modest (not unbounded) to avoid hammering the data
+            # source with too many simultaneous requests.
+            s1_combined = {}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [
+                    executor.submit(
+                        preprocessing.read_sentinel1_stac, item, self.source, overview_level, aoi_bbox_4326,
+                    )
+                    for item in s1_scenes
+                ]
+                for future in tqdm(
+                    concurrent.futures.as_completed(futures), total=len(futures),
+                    desc=f'Reading {dry_wet}-season scenes', disable=None,
+                ):
+                    stac_id, stac_ds = future.result()
+                    s1_combined[stac_id] = stac_ds
+
+            if dry_wet == 'dry':
+                self.s1_dry_dict = s1_combined
+            elif dry_wet == 'wet':
+                self.s1_wet_dict = s1_combined
+
+            logger.info(f'Read {len(s1_combined)} {dry_wet}-season scene(s)')
+            return
+
+        self._stream_read_reproject_cache(
+            dry_wet, s1_scenes, aoi_scene_dict, aoi_bbox_4326,
+            overview_level, max_workers, reproject_max_workers,
+        )
+
+    def _stream_read_reproject_cache(self, dry_wet, s1_scenes, aoi_scene_dict, aoi_bbox_4326,
+                                      overview_level, max_workers, reproject_max_workers):
+        """
+        Shared bounded two-stage read+reproject+cache pipeline behind
+        read_scenes()'s default (keep_intermediate_in_memory=False) path
+        -- see that method's docstring for the full contract. Used
+        identically by both dry and wet.
+        """
+        if reproject_max_workers is None:
+            reproject_max_workers = autofloods.utils.default_max_workers()
+
+        cache_dir = self.dry_scenes_cache_dir if dry_wet == 'dry' else self.wet_scenes_cache_dir
+        cache_prefix = 'dryscene' if dry_wet == 'dry' else 'wetscene'
+
+        def _cache_path(aoi_id, scene_id):
+            return os.path.join(cache_dir, f'{cache_prefix}_{aoi_id}_{scene_id}.nc')
+
+        # (aoi_id, scene_id) pending pairs. A scene needed by 2+ AOIs in
+        # this run (rare -- production runs one AOI per job) is read
+        # from the network once and reprojected once per AOI, not
+        # re-read per AOI -- `raw` is shared via ordinary Python
+        # reference counting across every (aoi_id, scene_id) task that
+        # needs it (each holds its own reference via closure/tuple), so
+        # it's released automatically once the last one consumes it,
+        # with no separate bookkeeping required.
+        scene_id_to_item = {item.id: item for item in s1_scenes}
+        pending_scene_ids = [
+            scene_id for aoi_id in aoi_scene_dict for scene_id in aoi_scene_dict[aoi_id]
+        ]
+        aoi_ids_by_scene = {}
+        for aoi_id in aoi_scene_dict:
+            for scene_id in aoi_scene_dict[aoi_id]:
+                aoi_ids_by_scene.setdefault(scene_id, []).append(aoi_id)
+
+        def _cache_hit_aoi_ids(scene_id):
+            return [aoi_id for aoi_id in aoi_ids_by_scene[scene_id] if os.path.exists(_cache_path(aoi_id, scene_id))]
+
+        def _read_one(scene_id):
+            _, raw = preprocessing.read_sentinel1_stac(
+                scene_id_to_item[scene_id], self.source, overview_level, aoi_bbox_4326,
+            )
+            return scene_id, raw
+
+        # Per-AOI UTM zone/clip geometry, computed once and reused across
+        # every scene for that AOI -- only needed for dry's rough-reproject
+        # step below (mirrors reproject_clip_stac()'s own per-id setup).
+        _dry_gdf_cache = {}
+
+        def _dry_gdf_and_zone(aoi_id):
+            if aoi_id not in _dry_gdf_cache:
+                gdf = gpd.read_file(self.grid_shapefile_path)
+                gdf = gdf.loc[gdf['ID'].isin([aoi_id])]
+                tile_utm_zone = autofloods.utils.zone_to_epsg(gdf['zone'].values[0])
+                gdf = gdf.to_crs(tile_utm_zone)
+                _dry_gdf_cache[aoi_id] = (gdf, tile_utm_zone)
+            return _dry_gdf_cache[aoi_id]
+
+        def _reproject_and_cache_one(aoi_id, scene_id, raw):
+            cache_path = _cache_path(aoi_id, scene_id)
+            if os.path.exists(cache_path):
+                scene = xr.load_dataarray(cache_path)
+            else:
+                if dry_wet == 'dry':
+                    # Dry's existing (keep_intermediate_in_memory=True)
+                    # path does TWO regrid passes -- reproject_clip_stac()'s
+                    # rough native->tile-UTM reproject+clip, THEN
+                    # compute_dry_baseline_stats()'s own clip_xarray_using_id
+                    # align onto the final explicit grid. Replicated here
+                    # exactly (not collapsed into one pass) so this
+                    # streaming path's output is bit-identical to that
+                    # existing sequence, not just numerically close --
+                    # clip_xarray_using_id's own resampling is not
+                    # perfectly idempotent, so doing it once from native
+                    # CRS instead of once-after-a-rough-reproject would
+                    # give a different (still correct, but not identical)
+                    # result. Wet has no such prior two-pass history --
+                    # its own pre-existing single clip_xarray_using_id
+                    # call is preserved unchanged in the else branch.
+                    gdf, tile_utm_zone = _dry_gdf_and_zone(aoi_id)
+                    rough_vv = raw['vv_ds'].rio.reproject(tile_utm_zone).rio.clip(gdf.geometry)
+                    rough_vh = raw['vh_ds'].rio.reproject(tile_utm_zone).rio.clip(gdf.geometry)
+                    vv_source, vh_source = rough_vv, rough_vh
+                else:
+                    vv_source, vh_source = raw['vv_ds'], raw['vh_ds']
+
+                scene = xr.concat(
+                    [
+                        preprocessing.clip_xarray_using_id(
+                            data_xarray=vv_source, grid_shapefile_path=self.grid_shapefile_path,
+                            aoi_id=aoi_id, ref_xarray=vv_source, cell_size=self.cell_size,
+                        ),
+                        preprocessing.clip_xarray_using_id(
+                            data_xarray=vh_source, grid_shapefile_path=self.grid_shapefile_path,
+                            aoi_id=aoi_id, ref_xarray=vh_source, cell_size=self.cell_size,
+                        ),
+                    ], dim='band').assign_coords(band=['vv_ds', 'vh_ds'])
+                scene = scene.where(scene < 50, np.nan)
+                scene.to_netcdf(cache_path)
+            valid_mask = ~np.any(np.isnan(scene.values), axis=0)
+            return aoi_id, scene_id, cache_path, valid_mask
+
+        scene_paths = {}
+        valid_count_by_aoi = {}
+
+        # Resumability at the read level, not just the reproject level:
+        # a scene whose cache already exists for EVERY AOI needing it
+        # skips the network read entirely (previously -- see wet's prior
+        # cache-based design this generalizes -- a resumed run still
+        # re-read every scene from the network even when every one of
+        # its cache files already existed, only skipping the reproject).
+        # Scenes needing at least one real read go through the bounded
+        # read+reproject pipeline below; fully-cached scenes are loaded
+        # straight from disk (still bounded by reproject_max_workers, no
+        # network I/O at all).
+        unique_scene_ids = list(dict.fromkeys(pending_scene_ids))
+        fully_cached_scene_ids = [
+            scene_id for scene_id in unique_scene_ids
+            if len(_cache_hit_aoi_ids(scene_id)) == len(aoi_ids_by_scene[scene_id])
+        ]
+        scene_ids_needing_read = [s for s in unique_scene_ids if s not in set(fully_cached_scene_ids)]
+        remaining_reads = iter(scene_ids_needing_read)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as read_executor, \
+                concurrent.futures.ThreadPoolExecutor(max_workers=reproject_max_workers) as reproject_executor, \
+                tqdm(total=len(pending_scene_ids), desc=f'Reading {dry_wet}-season scenes', disable=None) as pbar:
+
+            reads_in_flight = {}
+            # (aoi_id, scene_id, raw-or-None) reproject/cache-load tasks
+            # not yet submitted because reproject_executor was already
+            # at reproject_max_workers capacity.
+            reproject_backlog = [
+                (aoi_id, scene_id, None) for scene_id in fully_cached_scene_ids for aoi_id in aoi_ids_by_scene[scene_id]
             ]
-            for future in tqdm(
-                concurrent.futures.as_completed(futures), total=len(futures),
-                desc=f'Reading {dry_wet}-season scenes', disable=None,
-            ):
-                stac_id, stac_ds = future.result()
-                s1_combined[stac_id] = stac_ds
+            reprojects_in_flight = set()
+            # Total raw-scene residency is bounded by max_workers (reads
+            # in flight) + this cap on the reproject stage's own backlog
+            # -- NOT by the number of scenes. Without this cap, reads
+            # would race ahead of (typically slower, CPU-bound) reproject
+            # work and pile up an unbounded number of completed-but-not-
+            # yet-reprojected raw arrays in reproject_backlog, silently
+            # reproducing the exact unbounded-residency bug this method
+            # exists to fix. Caught via real before/after peak-memory
+            # measurement on a real tile-year (2026-09-06): an earlier
+            # version of this loop submitted a new read unconditionally
+            # whenever any read completed, and measured HIGHER peak RSS
+            # than the old bulk-read code it was meant to replace.
+            backlog_cap = max(reproject_max_workers, 1)
 
+            def _submit_from_backlog():
+                while reproject_backlog and len(reprojects_in_flight) < reproject_max_workers:
+                    aoi_id, scene_id, raw = reproject_backlog.pop(0)
+                    reprojects_in_flight.add(
+                        reproject_executor.submit(_reproject_and_cache_one, aoi_id, scene_id, raw)
+                    )
+
+            def _try_submit_reads():
+                while (len(reads_in_flight) < max_workers
+                       and len(reproject_backlog) + len(reprojects_in_flight) < backlog_cap):
+                    next_scene_id = next(remaining_reads, None)
+                    if next_scene_id is None:
+                        return
+                    reads_in_flight[read_executor.submit(_read_one, next_scene_id)] = next_scene_id
+
+            _submit_from_backlog()
+            _try_submit_reads()
+
+            while reads_in_flight or reprojects_in_flight or reproject_backlog:
+                pending_futures = set(reads_in_flight) | reprojects_in_flight
+                done, _ = concurrent.futures.wait(pending_futures, return_when=concurrent.futures.FIRST_COMPLETED)
+
+                for future in done:
+                    if future in reads_in_flight:
+                        scene_id = reads_in_flight.pop(future)
+                        _, raw = future.result()
+                        for aoi_id in aoi_ids_by_scene[scene_id]:
+                            reproject_backlog.append((aoi_id, scene_id, raw))
+                    else:
+                        reprojects_in_flight.discard(future)
+                        aoi_id, scene_id, cache_path, valid_mask = future.result()
+
+                        scene_paths.setdefault(aoi_id, {})[scene_id] = cache_path
+                        if aoi_id not in valid_count_by_aoi:
+                            valid_count_by_aoi[aoi_id] = np.zeros(valid_mask.shape, dtype=int)
+                        valid_count_by_aoi[aoi_id] += valid_mask.astype(int)
+                        pbar.update(1)
+
+                _submit_from_backlog()
+                _try_submit_reads()
+
+        n_scenes = sum(len(v) for v in scene_paths.values())
         if dry_wet == 'dry':
-            self.s1_dry_dict = s1_combined
-        elif dry_wet == 'wet':
-            self.s1_wet_dict = s1_combined
+            self.dry_scene_paths = scene_paths
+            self._dry_scene_valid_count_by_aoi = valid_count_by_aoi
+        else:
+            self.wet_scene_paths = scene_paths
+            self._wet_scene_valid_count_by_aoi = valid_count_by_aoi
 
-        logger.info(f'Read {len(s1_combined)} {dry_wet}-season scene(s)')
+        logger.info(f'Read {n_scenes} {dry_wet}-season scene(s)')
 
     def generate_mean_std_by_aoi(self, reproject_max_workers=None):
         """
@@ -709,28 +959,46 @@ class flood_mapper():
 
         reproject_max_workers is passed through to
         preprocessing.reproject_clip_stac()/compute_dry_baseline_stats()'s
-        thread pools (CPU-bound reprojection concurrency) -- None
-        (default) uses utils.default_max_workers().
+        thread pools (CPU-bound reprojection concurrency) when
+        keep_intermediate_in_memory=True (self.s1_dry_dict present) --
+        None (default) uses utils.default_max_workers(). When False
+        (default), read_scenes() has already read+reprojected+cached
+        every dry scene per AOI (self.dry_scene_paths); this method just
+        streams from that cache one scene at a time
+        (preprocessing.compute_dry_baseline_stats_from_paths()), bounded
+        by this same reproject_max_workers value (now governing
+        concurrent cache-file loads rather than reprojections, since
+        reprojection already happened at cache-write time).
         """
-        # separate and clip the reprojected image for each tile
         ids_to_fit = [id for id in self.selected_grid_id if not id in self.already_processed_aoi_ids]
-        reprojected_clipped_dry = {
-            id: preprocessing.reproject_clip_stac(self.s1_dry_dict, self.dry_aoi_scene_dict,
-                                                  self.grid_shapefile_path, id,
-                                                  max_workers=reproject_max_workers)
-            for id in tqdm(ids_to_fit, desc='Reprojecting dry-season scenes', disable=None)
-        }
 
-        # incrementally fold each tile's dry scenes into running
-        # per-pixel mean/std (Welford's algorithm) instead of stacking
-        # them all in memory first
-        dry_stats = {
-            id: preprocessing.compute_dry_baseline_stats(
-                reprojected_clipped_dry[id], self.grid_shapefile_path, id,
-                max_workers=reproject_max_workers, cell_size=self.cell_size,
-            )
-            for id in tqdm(reprojected_clipped_dry, desc='Fitting dry-season baseline', disable=None)
-        }
+        if hasattr(self, 's1_dry_dict'):
+            # keep_intermediate_in_memory=True: original behavior,
+            # unchanged -- reproject from the bulk in-memory dict.
+            reprojected_clipped_dry = {
+                id: preprocessing.reproject_clip_stac(self.s1_dry_dict, self.dry_aoi_scene_dict,
+                                                      self.grid_shapefile_path, id,
+                                                      max_workers=reproject_max_workers)
+                for id in tqdm(ids_to_fit, desc='Reprojecting dry-season scenes', disable=None)
+            }
+            dry_stats = {
+                id: preprocessing.compute_dry_baseline_stats(
+                    reprojected_clipped_dry[id], self.grid_shapefile_path, id,
+                    max_workers=reproject_max_workers, cell_size=self.cell_size,
+                )
+                for id in tqdm(reprojected_clipped_dry, desc='Fitting dry-season baseline', disable=None)
+            }
+        else:
+            # Default: stream from read_scenes()'s persistent per-scene
+            # disk cache (self.dry_scene_paths[id]) -- no separate align
+            # step needed, since read_scenes() already put each cached
+            # scene on the correct final grid.
+            dry_stats = {
+                id: preprocessing.compute_dry_baseline_stats_from_paths(
+                    self.dry_scene_paths[id], max_workers=reproject_max_workers,
+                )
+                for id in tqdm(ids_to_fit, desc='Fitting dry-season baseline', disable=None)
+            }
 
         # calculate cell level baseline (Z-score: mean and std) for the dry scenes.
         # Skipped for detectors that don't fit a per-tile baseline at all
@@ -759,7 +1027,9 @@ class flood_mapper():
         self.load_mean_std_by_aoi()
 
         # self.s1_dry_dict (every dry-season scene's raw VV/VH arrays,
-        # set by read_scenes()) is never read again after the
+        # set by read_scenes() only when keep_intermediate_in_memory=True
+        # -- the default path never creates it at all, streaming from
+        # self.dry_scene_paths instead) is never read again after the
         # reprojected_clipped_dry comprehension above -- nothing else in
         # the pipeline references it. Left alive, it stays fully
         # resident for the rest of this flood_mapper instance's life
@@ -775,7 +1045,7 @@ class flood_mapper():
         # so True's only effect here is simply not freeing it (see the
         # constructor docstring for the memory/IO tradeoff this flag is
         # for).
-        if not self.keep_intermediate_in_memory:
+        if not self.keep_intermediate_in_memory and hasattr(self, 's1_dry_dict'):
             del self.s1_dry_dict
             gc.collect()
 
@@ -823,7 +1093,7 @@ class flood_mapper():
         preprocessing.smoothen_slope() it replaces, removed 2026-09-05):
         that kernel required ~101 GB for a real ~100km tile, an
         out-of-memory crash confirmed independent of this method's own
-        DEM-read fix. `map_floods()`'s `rel_slope_thd` default was never
+        DEM-read fix. `map_floods()`'s `slope_thd` default was never
         documented in this (non-deprecated) code path as tuned
         specifically for smoothed vs. raw slope -- flagged as an open
         question in CLAUDE.md's Future To-Dos, not resolved here.
@@ -910,128 +1180,132 @@ class flood_mapper():
     def prepare_wet_scenes(self, overview_level=3, max_workers=6, reproject_max_workers=None):
         """
         Search, read, reproject, and clip every wet-season scene for each
-        AOI onto that AOI's baseline grid (ref_xarray=mean_std_by_aoi[id]) --
-        must run after generate_mean_std_by_aoi(), which that reference
-        grid comes from.
+        AOI onto that AOI's baseline grid -- must run after
+        generate_mean_std_by_aoi().
 
-        Unlike the raw network read below (self.s1_wet_dict, bulk/
-        concurrent -- unchanged, same as read_scenes() always was), the
-        reproject+clip step is a bounded sliding window (same pattern as
-        preprocessing.compute_dry_baseline_stats()/utils.download_nasadem()):
-        at most `reproject_max_workers` scenes are ever resident at once,
-        each written straight to a persistent per-scene cache file
-        (self.wet_scenes_cache_dir/wetscene_<aoi_id>_<scene_id>.nc) and
-        discarded immediately after -- never a full in-memory dict of
-        every wet scene, which is what actually caused the OOM risk this
-        replaces. The cache is resumable: a scene whose .nc already
-        exists (from an earlier run, or a run interrupted mid-tile) is
-        loaded rather than re-read/re-reprojected, and survives a crash
-        anywhere later in the pipeline (map_floods(), etc.).
+        Default (keep_intermediate_in_memory=False): read_scenes() does
+        all the real work -- its own bounded two-stage read+reproject
+        pipeline reads each scene once (bounded by max_workers),
+        reprojects+clips it per AOI (bounded by reproject_max_workers),
+        writes it to a persistent per-(AOI, scene) cache file
+        (self.wet_scenes_cache_dir/wetscene_<aoi_id>_<scene_id>.nc), and
+        discards it -- never a full in-memory dict of every wet scene,
+        which is what actually caused the OOM risk this replaces. The
+        cache is resumable: a scene whose .nc already exists (from an
+        earlier run, or a run interrupted mid-tile) is loaded rather
+        than re-read/re-reprojected, and survives a crash anywhere later
+        in the pipeline (map_floods(), etc.). read_scenes() sets
+        self.wet_scene_paths ({aoi_id: {scene_id: cache path}} --
+        map_floods() reads from this, not from an in-memory dict, and
+        can be called/re-called with different thresholds any number of
+        times without re-triggering any of this) and a private
+        self._wet_scene_valid_count_by_aoi ({aoi_id: 2D numpy int
+        array}, a per-pixel count of scenes with a VALID (non-NaN)
+        observation -- generate_number_of_scenes() reads this directly).
 
-        Sets self.wet_scene_paths: {aoi_id: {scene_id: path to that
-        scene's cached .nc}} -- map_floods() reads from this, not from
-        an in-memory dict, and can be called (and re-called, with
-        different thresholds) any number of times afterward without
-        re-triggering any of this. Also sets a private
-        self._wet_scene_valid_count_by_aoi: {aoi_id: 2D numpy int array},
-        a per-pixel count of scenes with a VALID (non-NaN) observation,
-        folded in one scene at a time as each is processed --
-        generate_number_of_scenes() reads this directly instead of
-        re-deriving it from the (no-longer-fully-resident) wet scenes.
+        keep_intermediate_in_memory=True: read_scenes() only bulk-reads
+        into self.s1_wet_dict (original behavior); this method then
+        reprojects+caches from that bulk dict itself via the same
+        bounded-sliding-window loop it always used, still producing
+        self.wet_scene_paths/self._wet_scene_valid_count_by_aoi (needed
+        downstream regardless of the flag).
 
         max_workers controls read_scenes()'s download concurrency
-        (network-bound); reproject_max_workers bounds the sliding
-        window above (CPU-bound reprojection) -- same GIL-releasing-
-        GDAL-warp pattern as preprocessing.reproject_clip_stac(). None
-        (default) uses utils.default_max_workers() -- (available CPUs
-        - 1) on whatever system this runs on.
+        (network-bound); reproject_max_workers bounds per-scene
+        reprojection concurrency -- same GIL-releasing-GDAL-warp pattern
+        as preprocessing.reproject_clip_stac(). None (default) uses
+        utils.default_max_workers() -- (available CPUs - 1) on whatever
+        system this runs on.
         """
         if reproject_max_workers is None:
             reproject_max_workers = autofloods.utils.default_max_workers()
         # call the previouisly defined method to get S1 scenes for the wet period
         self.get_s1_items(dry_wet='wet')
-        self.read_scenes(dry_wet='wet', overview_level=overview_level, max_workers=max_workers)
+        self.read_scenes(dry_wet='wet', overview_level=overview_level, max_workers=max_workers,
+                          reproject_max_workers=reproject_max_workers)
 
-        def _cache_path(aoi_id, scene_id):
-            return os.path.join(self.wet_scenes_cache_dir, f'wetscene_{aoi_id}_{scene_id}.nc')
+        if hasattr(self, 's1_wet_dict'):
+            # keep_intermediate_in_memory=True: original bounded
+            # reproject+cache loop, consuming the bulk in-memory dict
+            # read_scenes() just populated -- unchanged from before this
+            # fix, since read_scenes() itself only handled the bulk read
+            # in this branch, not the reproject/cache step.
+            def _cache_path(aoi_id, scene_id):
+                return os.path.join(self.wet_scenes_cache_dir, f'wetscene_{aoi_id}_{scene_id}.nc')
 
-        def _process_one_scene(aoi_id, scene_id):
-            cache_path = _cache_path(aoi_id, scene_id)
-            if os.path.exists(cache_path):
-                scene = xr.load_dataarray(cache_path)
-            else:
-                scene = xr.concat(
-                    [
-                        autofloods.preprocessing.clip_xarray_using_id(
-                            data_xarray=self.s1_wet_dict[scene_id]['vv_ds'],
-                            grid_shapefile_path=self.grid_shapefile_path,
-                            aoi_id=aoi_id,
-                            ref_xarray=self.mean_std_by_aoi[aoi_id],
-                            cell_size=self.cell_size,
-                        ),
-                        autofloods.preprocessing.clip_xarray_using_id(
-                            data_xarray=self.s1_wet_dict[scene_id]['vh_ds'],
-                            grid_shapefile_path=self.grid_shapefile_path,
-                            aoi_id=aoi_id,
-                            ref_xarray=self.mean_std_by_aoi[aoi_id],
-                            cell_size=self.cell_size,
-                        )
-                    ], dim='band').assign_coords(band=['vv_ds', 'vh_ds'])
-                # handle nodata (was a separate second pass over every
-                # scene of every AOI; now per-scene, right before caching)
-                scene = scene.where(scene < 50, np.nan)
-                scene.to_netcdf(cache_path)
+            def _process_one_scene(aoi_id, scene_id):
+                cache_path = _cache_path(aoi_id, scene_id)
+                if os.path.exists(cache_path):
+                    scene = xr.load_dataarray(cache_path)
+                else:
+                    scene = xr.concat(
+                        [
+                            autofloods.preprocessing.clip_xarray_using_id(
+                                data_xarray=self.s1_wet_dict[scene_id]['vv_ds'],
+                                grid_shapefile_path=self.grid_shapefile_path,
+                                aoi_id=aoi_id,
+                                ref_xarray=self.mean_std_by_aoi[aoi_id],
+                                cell_size=self.cell_size,
+                            ),
+                            autofloods.preprocessing.clip_xarray_using_id(
+                                data_xarray=self.s1_wet_dict[scene_id]['vh_ds'],
+                                grid_shapefile_path=self.grid_shapefile_path,
+                                aoi_id=aoi_id,
+                                ref_xarray=self.mean_std_by_aoi[aoi_id],
+                                cell_size=self.cell_size,
+                            )
+                        ], dim='band').assign_coords(band=['vv_ds', 'vh_ds'])
+                    scene = scene.where(scene < 50, np.nan)
+                    scene.to_netcdf(cache_path)
 
-            # a pixel is a VALID observation for this scene only if
-            # neither band is NaN there -- one NaN band (nodata/gap) is
-            # enough to disqualify the whole pixel for this scene, same
-            # all-or-nothing logic the old gap_mask used, just inverted
-            # to count what generate_number_of_scenes() actually needs:
-            # usable observations, not gaps.
-            valid_mask = ~np.any(np.isnan(scene.values), axis=0)
-            return aoi_id, scene_id, cache_path, valid_mask
+                valid_mask = ~np.any(np.isnan(scene.values), axis=0)
+                return aoi_id, scene_id, cache_path, valid_mask
 
-        self.wet_scene_paths = {}
-        self._wet_scene_valid_count_by_aoi = {}
+            self.wet_scene_paths = {}
+            self._wet_scene_valid_count_by_aoi = {}
 
-        pending = [
-            (aoi_id, scene_id)
-            for aoi_id in self.wet_aoi_scene_dict
-            for scene_id in self.wet_aoi_scene_dict[aoi_id]
-        ]
-        remaining = iter(pending)
+            pending = [
+                (aoi_id, scene_id)
+                for aoi_id in self.wet_aoi_scene_dict
+                for scene_id in self.wet_aoi_scene_dict[aoi_id]
+            ]
+            remaining = iter(pending)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=reproject_max_workers) as executor, \
-                tqdm(total=len(pending), desc='Preparing wet-season scenes', disable=None) as pbar:
-            in_flight = set()
-            for aoi_id, scene_id in itertools.islice(remaining, reproject_max_workers):
-                in_flight.add(executor.submit(_process_one_scene, aoi_id, scene_id))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=reproject_max_workers) as executor, \
+                    tqdm(total=len(pending), desc='Preparing wet-season scenes', disable=None) as pbar:
+                in_flight = set()
+                for aoi_id, scene_id in itertools.islice(remaining, reproject_max_workers):
+                    in_flight.add(executor.submit(_process_one_scene, aoi_id, scene_id))
 
-            while in_flight:
-                done, in_flight = concurrent.futures.wait(
-                    in_flight, return_when=concurrent.futures.FIRST_COMPLETED
-                )
-                for future in done:
-                    aoi_id, scene_id, cache_path, valid_mask = future.result()
+                while in_flight:
+                    done, in_flight = concurrent.futures.wait(
+                        in_flight, return_when=concurrent.futures.FIRST_COMPLETED
+                    )
+                    for future in done:
+                        aoi_id, scene_id, cache_path, valid_mask = future.result()
 
-                    self.wet_scene_paths.setdefault(aoi_id, {})[scene_id] = cache_path
+                        self.wet_scene_paths.setdefault(aoi_id, {})[scene_id] = cache_path
 
-                    if aoi_id not in self._wet_scene_valid_count_by_aoi:
-                        self._wet_scene_valid_count_by_aoi[aoi_id] = np.zeros(valid_mask.shape, dtype=int)
-                    self._wet_scene_valid_count_by_aoi[aoi_id] += valid_mask.astype(int)
-                    pbar.update(1)
+                        if aoi_id not in self._wet_scene_valid_count_by_aoi:
+                            self._wet_scene_valid_count_by_aoi[aoi_id] = np.zeros(valid_mask.shape, dtype=int)
+                        self._wet_scene_valid_count_by_aoi[aoi_id] += valid_mask.astype(int)
+                        pbar.update(1)
 
-                    next_item = next(remaining, None)
-                    if next_item is not None:
-                        in_flight.add(executor.submit(_process_one_scene, *next_item))
+                        next_item = next(remaining, None)
+                        if next_item is not None:
+                            in_flight.add(executor.submit(_process_one_scene, *next_item))
 
-        # self.s1_wet_dict (every wet-season scene's raw VV/VH arrays)
-        # is never read again after the reproject loop above -- same
-        # leak class as self.s1_dry_dict (fixed in 0.1.0a17), just
-        # never patched on the wet side until now.
-        if not self.keep_intermediate_in_memory:
-            del self.s1_wet_dict
-            gc.collect()
+            # self.s1_wet_dict (every wet-season scene's raw VV/VH arrays)
+            # is never read again after the reproject loop above -- same
+            # leak class as self.s1_dry_dict (fixed in 0.1.0a17), just
+            # never patched on the wet side until now.
+            if not self.keep_intermediate_in_memory:
+                del self.s1_wet_dict
+                gc.collect()
+        # else: default path -- read_scenes() already built
+        # self.wet_scene_paths/self._wet_scene_valid_count_by_aoi
+        # directly via its own bounded read+reproject+cache pipeline.
+        # Nothing more to do here.
 
         n_scenes = sum(len(v) for v in self.wet_scene_paths.values())
         logger.info(
@@ -1039,8 +1313,8 @@ class flood_mapper():
             f'{n_scenes} scene(s) total'
         )
 
-    def map_floods(self, vv_thd=-3, vh_thd=-3, rel_slope_thd=20, export_vector=False, export_maps=False,
-                   smooth=False, smooth_kernel_size=3):
+    def map_floods(self, vv_thd=-3, vh_thd=-3, slope_thd=15, export_vector=False, export_maps=False,
+                   smooth=False, smooth_kernel_size=3, rel_slope_thd=None):
         """
         Classify every wet-season scene against its AOI's baseline
         (self.detector.detect()), apply the slope mask if the detector
@@ -1050,6 +1324,22 @@ class flood_mapper():
         file paths, not arrays (0/1/2/3 encoding -- see
         detectors.ZScoreDetector -- baked into the exported raster's
         pixel values).
+
+        slope_thd defaults to 15 (degrees), matching Global Flood
+        Mapper -- the method AutoFloods inherits its detection approach
+        from -- though see preprocessing.compute_slope()'s docstring
+        for an open caveat: that value was tuned against GFM's own
+        (smoothed) slope, not necessarily validated against this
+        codebase's current raw/unsmoothed slope. It's compared as a
+        flat absolute per-pixel cutoff (preprocessing.compute_slope()'s
+        plain degrees, nothing normalized against a neighborhood,
+        percentile, or tile-wide reference) -- named `slope_thd` since
+        0.1.0a26 (previously `rel_slope_thd`; that name implied a
+        relative/normalized comparison this never was). `rel_slope_thd`
+        is still accepted as a deprecated alias -- passing it emits a
+        DeprecationWarning and forwards to slope_thd, so existing
+        scripts/configs keep working; it will be removed in a future
+        release.
 
         smooth=True (off by default) applies
         postprocessing.smoothen_flood_raster() -- a majority/mode
@@ -1071,7 +1361,7 @@ class flood_mapper():
         slope-masks it, writes it, and discards it before moving to the
         next -- never holding more than one scene's classified array in
         memory. The wet-scene cache doesn't depend on vv_thd/vh_thd/
-        rel_slope_thd, so this method is safe to call again with
+        slope_thd, so this method is safe to call again with
         different thresholds without re-triggering prepare_wet_scenes()'s
         read/reproject work -- each call just re-reads the same cached
         scenes and overwrites its own output files.
@@ -1082,12 +1372,27 @@ class flood_mapper():
         scenes() now read self.flood_dict's paths from disk). export_vector/
         export_maps (still optional, off by default) reload a scene's
         just-written raster from disk one at a time when requested.
-        NOTE: export_vector's and the raster export's output filenames
-        derive the date/track suffix from scene_id.split('_')[4:], which
-        assumes MPC-style scene IDs -- an OPERA_PASS_{date} scene_id (3
-        tokens) yields an empty suffix there, not a crash, just a
-        less-informative filename.
+        Per-scene output filenames use the full scene_id (sanitized for
+        filesystem safety via utils.sanitize_scene_id_for_filename) as
+        their suffix -- not a positional token slice. An earlier version
+        derived the suffix from scene_id.split('_')[4:], which silently
+        collapsed every OPERA-style scene_id ("OPERA_PASS_{date}", 3
+        tokens) to an empty suffix, so every scene in a run overwrote
+        the same output path (found 2026-09-06; confirmed dormant in the
+        published Bihar production record only because that run used
+        export_raster=False -- see tests.test_map_floods_filenames for
+        the regression coverage).
         """
+        if rel_slope_thd is not None:
+            warnings.warn(
+                "map_floods()'s rel_slope_thd parameter is deprecated and will be "
+                "removed in a future release -- renamed to slope_thd, since the value "
+                "is compared as a flat absolute per-pixel slope cutoff in degrees, "
+                "nothing relative. Pass slope_thd= instead.",
+                DeprecationWarning, stacklevel=2,
+            )
+            slope_thd = rel_slope_thd
+
         # keep backward-compatible per-call threshold overrides for detectors
         # that expose them (e.g. ZScoreDetector); a detector without these
         # attributes ignores the override and uses its own configuration.
@@ -1161,7 +1466,7 @@ class flood_mapper():
                 del wet_scene
 
                 if slope_xarray is not None:
-                    classified = classified.where(slope_xarray.values[0, :, :] < rel_slope_thd, 0)
+                    classified = classified.where(slope_xarray.values[0, :, :] < slope_thd, 0)
 
                 if smooth:
                     classified = autofloods.postprocessing.smoothen_flood_raster(
@@ -1173,7 +1478,7 @@ class flood_mapper():
 
                 outfile_flood = flood_raster_outfile.replace(
                     '_id.tif',
-                    f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{"_".join(scene_id.split("_")[4:])}.tif'
+                    f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{autofloods.utils.sanitize_scene_id_for_filename(scene_id)}.tif'
                 )
                 autofloods.utils.export_xarray(classified, outfile_flood)
                 scene_out[scene_id] = outfile_flood
@@ -1203,7 +1508,7 @@ class flood_mapper():
                     classified = xr.load_dataarray(flood_path, engine='rasterio').squeeze('band', drop=True)
                     classified = classified.rio.write_crs(self.mean_std_by_aoi[id].rio.crs)
                     gdf = autofloods.postprocessing.polygonize_flood_raster(classified)
-                    outfile_flood = flood_vector_outfile.replace('_id.gpkg', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{"_".join(scene_id.split("_")[4:])}.gpkg')
+                    outfile_flood = flood_vector_outfile.replace('_id.gpkg', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{autofloods.utils.sanitize_scene_id_for_filename(scene_id)}.gpkg')
                     # export only if the GDF has any flood cells
                     if gdf.shape[0] > 0:
                         gdf.to_crs("EPSG:4326").to_file(outfile_flood, index=False)
@@ -1228,7 +1533,7 @@ class flood_mapper():
                     # WGS84 for lon/lat axes.
                     classified = xr.load_dataarray(flood_path, engine='rasterio').squeeze('band', drop=True)
                     classified = classified.rio.write_crs(self.mean_std_by_aoi[id].rio.crs)
-                    outfile_flood = flood_map_outfile.replace('_id.png', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{"_".join(scene_id.split("_")[4:])}.png')
+                    outfile_flood = flood_map_outfile.replace('_id.png', f'_DRY_{dry_year_begin}_{dry_year_end}_WET_{wet_yearmonth_begin}_{wet_yearmonth_end}_{id}_{autofloods.utils.sanitize_scene_id_for_filename(scene_id)}.png')
 
                     mapfloods.flood_images(
                         flood_xarray=classified,
@@ -1456,10 +1761,11 @@ class flood_mapper():
         create_out_dirs() for folder order; folders_to_create[-1] is
         the DEM/slope cache, excluded unless remove_slope=True since
         slope is expensive to recompute and reusable across years for
-        the same AOI). This includes wet_scenes_cache/ (prepare_wet_
-        scenes()'s persistent per-scene cache, one reprojected NetCDF
-        per wet scene -- can be sizeable, since it holds every wet
-        scene at full tile resolution). Destructive and immediate --
+        the same AOI). This includes dry_scenes_cache/ and
+        wet_scenes_cache/ (read_scenes()'s persistent per-(AOI, scene)
+        cache, one reprojected NetCDF per scene -- can be sizeable,
+        since it holds every scene at full tile resolution).
+        Destructive and immediate --
         no confirmation, no recycle bin. Not currently called anywhere
         in this package; provided for callers who want to reclaim disk
         space between runs.

@@ -91,8 +91,7 @@ def _write_wet_scene_and_flood(fm, scene_id, rng, flood_value=0):
 
 def _mpc_scene_id(date_str, track=1):
     # MPC-style scene_id -- 4+ underscore-separated tokens before the
-    # date, matching what _extract_date_token(date_index=-5) and
-    # scene_id.split('_')[4:] (map_floods()'s suffix formula) expect.
+    # date, matching what _extract_date_token(date_index=-5) expects.
     return f'S1A_IW_GRDH_1SDV_{date_str}T000000_{date_str}T000025_{track:06d}_{track:06d}_rtc'
 
 
