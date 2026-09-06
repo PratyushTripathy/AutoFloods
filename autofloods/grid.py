@@ -137,7 +137,7 @@ def _tiles_for_zone(zone_number, hemisphere, aoi_geom_4326, tile_size_m):
 
 
 def generate_grid(aoi, mode='mgrs', tile_size_km=None, output_path=None,
-                   id_col='ID', dry_date_col='dry_month', dry_months=None):
+                   id_col='ID', dry_date_col='dry_month'):
     """
     Generate a tiling grid for an area of interest, in the schema
     flood_mapper expects from a grid_shapefile (see this module's
@@ -181,12 +181,21 @@ def generate_grid(aoi, mode='mgrs', tile_size_km=None, output_path=None,
         flood_mapper's default). Values are sequential ints.
     dry_date_col : str, optional
         Name of the dry-season-month column (default 'dry_month',
-        matching flood_mapper's default).
-    dry_months : str, optional
-        If given, stamped into every tile's `dry_date_col` (e.g.
-        "04,05"). Dry season is climate knowledge, not derivable from
-        AOI geometry -- if omitted, the column is left as the
-        placeholder "REQUIRED" and must be filled in before the grid
+        matching flood_mapper's default). Always created with the
+        placeholder value "REQUIRED" -- generate_grid() is purely
+        geometric and never assigns a real dry-season value itself
+        (dry season is climate knowledge, not derivable from AOI
+        geometry, and baking a single uniform value into grid
+        generation would also preclude the more realistic case of
+        per-tile variation). Set it yourself afterward, e.g.::
+
+            gdf = generate_grid(aoi, mode='mgrs')
+            gdf['dry_month'] = '04,05'  # same value for every tile
+            # or, for per-tile variation:
+            gdf.loc[gdf['zone'].str.startswith('43'), 'dry_month'] = '04,05'
+            gdf.loc[gdf['zone'].str.startswith('44'), 'dry_month'] = '05,06'
+
+        The column must be filled in with real values before the grid
         is usable with flood_mapper (every pipeline run does a
         dry-season search as a fixed step, even for OtsuDetector,
         which only skips fitting a statistical baseline from it -- see
@@ -268,7 +277,7 @@ def generate_grid(aoi, mode='mgrs', tile_size_km=None, output_path=None,
         )
 
     grid_gdf = gpd.GeoDataFrame(rows, geometry='geometry', crs='EPSG:4326')
-    grid_gdf[dry_date_col] = dry_months if dry_months is not None else 'REQUIRED'
+    grid_gdf[dry_date_col] = 'REQUIRED'
 
     if output_path is not None:
         grid_gdf.to_file(output_path)

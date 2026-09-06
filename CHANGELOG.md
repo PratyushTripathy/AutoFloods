@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.1.0a24
+
+**Breaking change**: `grid.generate_grid()` no longer accepts a
+`dry_months` parameter. It's now purely geometric -- geometry and
+season-assignment are separate concerns, and baking a single uniform
+value into grid generation also precluded the more realistic case of
+per-tile variation. Every tile's `dry_date_col` (default `dry_month`)
+now always comes back as the placeholder `"REQUIRED"`, matching its
+existing behavior when `dry_months` was previously omitted -- just
+unconditionally now, regardless of how many tiles are generated.
+
+If your script calls `generate_grid(..., dry_months='04,05')`, drop
+that argument -- passing it now raises `TypeError`. Set the column
+yourself afterward instead:
+
+```python
+gdf = generate_grid(aoi, mode='mgrs')
+gdf['dry_month'] = '04,05'  # same value for every tile
+# or, for per-tile variation:
+gdf.loc[gdf['zone'].str.startswith('43'), 'dry_month'] = '04,05'
+gdf.loc[gdf['zone'].str.startswith('44'), 'dry_month'] = '05,06'
+```
+
+**`flood_mapper`'s own `grid_dry_months=` convenience parameter (the
+`aoi=` on-the-fly grid generation path) is unaffected** -- it still
+requires one value and stamps it across every tile exactly as before,
+just implemented at that convenience layer (setting the grid's
+`dry_month` column directly after `generate_grid()` returns) instead
+of inside `generate_grid()` itself. Verified end-to-end, not just at
+the unit level.
+
+Also fixed a stale, unrelated doc claim in `examples.qmd`'s Grid
+Generation section ("Only the Northern Hemisphere is currently
+supported") -- wrong since Southern Hemisphere support was added
+2026-09-03, just never updated in this doc until now.
+
+Full test suite: 205 passing.
+
 ## 0.1.0a23
 
 Two independent changes in this release.

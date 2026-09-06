@@ -35,19 +35,43 @@ from shapely.geometry import box
 aoi = box(85.0, 25.0, 85.5, 25.5)  # or a shapefile/geopackage path, or a GeoDataFrame
 
 # MGRS mode
-mgrs_grid = generate_grid(aoi, mode='mgrs', dry_months='04,05',
-                           output_path='resources/my_mgrs_grid.gpkg')
+mgrs_grid = generate_grid(aoi, mode='mgrs')
 
 # UTM fishnet mode, 50km tiles
-fishnet_grid = generate_grid(aoi, mode='utm_fishnet', tile_size_km=50,
-                              dry_months='04,05',
-                              output_path='resources/my_fishnet_grid.gpkg')
+fishnet_grid = generate_grid(aoi, mode='utm_fishnet', tile_size_km=50)
 ```
 
-`dry_months` (e.g. `"04,05"`) is required to actually run the pipeline
-with the generated grid -- dry season is climate knowledge, not
-derivable from AOI geometry. Only the Northern Hemisphere is currently
-supported (see `generate_grid`'s docstring in the [API
+`generate_grid()` is purely geometric -- it never assigns a real
+dry-season value itself, since dry season is climate knowledge, not
+derivable from AOI geometry (and baking a single uniform value into
+grid generation would also preclude the more realistic case of
+per-tile variation). Every tile's `dry_month` column comes back set to
+the placeholder `"REQUIRED"`; set it yourself afterward, before saving
+or using the grid:
+
+```python
+mgrs_grid['dry_month'] = '04,05'  # same value for every tile
+mgrs_grid.to_file('resources/my_mgrs_grid.gpkg')
+
+# or, for per-tile variation:
+fishnet_grid.loc[fishnet_grid['zone'].str.startswith('43'), 'dry_month'] = '04,05'
+fishnet_grid.loc[fishnet_grid['zone'].str.startswith('44'), 'dry_month'] = '05,06'
+fishnet_grid.to_file('resources/my_fishnet_grid.gpkg')
+```
+
+**Breaking change**: `generate_grid()`'s `dry_months` parameter has
+been **removed** -- it always leaves the column as the `"REQUIRED"`
+placeholder now, regardless of how many tiles are generated. If your
+script calls `generate_grid(..., dry_months='04,05')`, drop that
+argument and set the column afterward as shown above; passing it now
+raises `TypeError`. `flood_mapper`'s own `grid_dry_months=` parameter
+(Option 1 below) is unaffected -- it still stamps one value across
+every tile, just via the grid's `dry_month` column directly, after
+`generate_grid()` returns, rather than inside `generate_grid()` itself.
+
+Both UTM zone hemispheres are supported: an AOI straddling the equator
+produces tiles in the correct Northern/Southern UTM zone for each
+tile's own centroid (see `generate_grid`'s docstring in the [API
 reference](reference/index.qmd)).
 
 ## Option 1: `flood_mapper` directly

@@ -263,9 +263,16 @@ class flood_mapper():
             generated_grid_path = os.path.join(self.resources_base, 'generated_grid.gpkg')
             generated_grid = grid.generate_grid(
                 aoi, mode=resolved_mode, tile_size_km=grid_tile_size_km,
-                output_path=generated_grid_path, id_col=id_col,
-                dry_date_col=dry_date_col, dry_months=grid_dry_months,
+                id_col=id_col, dry_date_col=dry_date_col,
             )
+            # generate_grid() itself is purely geometric (geometry and
+            # season-assignment are separate concerns) -- stamp the
+            # single grid_dry_months value across every tile here, at
+            # the flood_mapper convenience-layer level, then write the
+            # file (output_path isn't passed to generate_grid() above
+            # since the dry_date_col value has to be set first).
+            generated_grid[dry_date_col] = grid_dry_months
+            generated_grid.to_file(generated_grid_path)
             grid_shapefile = generated_grid_path
             if grid_id_list is None:
                 grid_id_list = generated_grid[id_col].tolist()

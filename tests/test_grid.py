@@ -167,15 +167,27 @@ class TestSchemaCompatibility:
     def test_custom_id_and_dry_date_columns(self):
         grid = generate_grid(
             SINGLE_ZONE_AOI, mode='utm_fishnet', tile_size_km=50,
-            id_col='tile_id', dry_date_col='dry_mo', dry_months='04,05',
+            id_col='tile_id', dry_date_col='dry_mo',
         )
         assert 'tile_id' in grid.columns
         assert 'dry_mo' in grid.columns
+        # generate_grid() is purely geometric -- the dry-season column
+        # is always a placeholder, set by the caller afterward (a
+        # separate concern from geometry, and the only way to support
+        # per-tile variation, not just a single uniform value).
+        assert (grid['dry_mo'] == 'REQUIRED').all()
+        grid['dry_mo'] = '04,05'
         assert (grid['dry_mo'] == '04,05').all()
 
-    def test_dry_months_placeholder_when_not_given(self):
+    def test_dry_months_placeholder_always(self):
+        # no dry_months parameter exists on generate_grid() at all --
+        # this is the only behavior, not a None-default fallback.
         grid = generate_grid(SINGLE_ZONE_AOI, mode='mgrs')
         assert (grid['dry_month'] == 'REQUIRED').all()
+
+    def test_generate_grid_rejects_dry_months_kwarg(self):
+        with pytest.raises(TypeError):
+            generate_grid(SINGLE_ZONE_AOI, mode='mgrs', dry_months='04,05')
 
     def test_ids_are_sequential_ints_starting_at_one(self):
         grid = generate_grid(SINGLE_ZONE_AOI, mode='mgrs')
