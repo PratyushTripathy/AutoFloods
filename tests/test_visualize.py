@@ -207,6 +207,87 @@ class TestPlotScenesAndFloods:
         with pytest.raises(ValueError, match='No wet scenes'):
             viz.plot_scenes_and_floods(fm, TILE_ID)
 
+    def test_legend_does_not_overlap_image_panels(self, tmp_path):
+        # the legend used to be a floating fig.legend() with no reserved
+        # space, clipping into the last row of panels (confirmed via a
+        # real rendered screenshot) -- now it's drawn in its own
+        # GridSpec row, so its bounding box must sit entirely below
+        # every image panel's bounding box, not just "not raise an error".
+        fm = _make_flood_mapper(tmp_path)
+        self._setup_n_scenes(fm, 11)
+
+        fig = viz.plot_scenes_and_floods(fm, TILE_ID)
+        fig.canvas.draw()  # finalize constrained_layout positions
+
+        legend_axes = [ax for ax in fig.axes if ax.get_legend() is not None]
+        image_axes = [ax for ax in fig.axes if ax.get_legend() is None]
+        assert len(legend_axes) == 1
+        legend_bbox = legend_axes[0].get_position()
+        lowest_image_bottom = min(ax.get_position().y0 for ax in image_axes)
+
+        assert legend_bbox.y1 <= lowest_image_bottom
+        plt.close(fig)
+
+
+class TestRgbCompositeAndFloodThumbnailDownsampling:
+    def test_rgb_composite_downsamples_large_scene(self, tmp_path):
+        fm = _make_flood_mapper(tmp_path)
+        rng = np.random.default_rng(4)
+        big_size = 1000
+        y = np.arange(big_size, 0, -1) * 30.0
+        x = np.arange(big_size) * 30.0
+        vv = xr.DataArray(rng.uniform(0.05, 1.0, (big_size, big_size)), dims=('y', 'x'), coords={'y': y, 'x': x})
+        vh = xr.DataArray(rng.uniform(0.01, 0.3, (big_size, big_size)), dims=('y', 'x'), coords={'y': y, 'x': x})
+        scene = xr.concat([vv, vh], dim='band').assign_coords(band=['vv_ds', 'vh_ds'])
+        path = os.path.join(fm.wet_scenes_cache_dir, 'wetscene_test_scene.nc')
+        scene.to_netcdf(path)
+
+        composite = viz._rgb_composite(path, thumbnail_max_size=200)
+
+        assert max(composite.shape[:2]) <= 200
+        assert composite.shape[2] == 3
+
+    def test_rgb_composite_no_downsample_when_already_small(self, tmp_path):
+        fm = _make_flood_mapper(tmp_path)
+        rng = np.random.default_rng(4)
+        vv = xr.DataArray(rng.uniform(0.05, 1.0, (SIZE, SIZE)), dims=('y', 'x'), coords={'y': Y, 'x': X})
+        vh = xr.DataArray(rng.uniform(0.01, 0.3, (SIZE, SIZE)), dims=('y', 'x'), coords={'y': Y, 'x': X})
+        scene = xr.concat([vv, vh], dim='band').assign_coords(band=['vv_ds', 'vh_ds'])
+        path = os.path.join(fm.wet_scenes_cache_dir, 'wetscene_test_small.nc')
+        scene.to_netcdf(path)
+
+        composite = viz._rgb_composite(path, thumbnail_max_size=400)
+
+        assert composite.shape[:2] == (SIZE, SIZE)
+
+    def test_flood_thumbnail_decimated_read_downsamples(self, tmp_path):
+        big_size = 1000
+        y = np.arange(big_size, 0, -1) * 30.0
+        x = np.arange(big_size) * 30.0
+        classified = xr.DataArray(
+            np.zeros((big_size, big_size), dtype='float64'), dims=('y', 'x'), coords={'y': y, 'x': x},
+        )
+        path = os.path.join(tmp_path, 'big_flood.tif')
+        utils.export_xarray(classified, path)
+
+        thumb = viz._read_flood_raster_thumbnail(path, thumbnail_max_size=200)
+
+        assert max(thumb.shape) <= 200
+
+
+class TestFloodCountBinning:
+    def test_bin_boundaries_group_values_correctly(self):
+        # 0 / 1-3 / 4-7 / 8+ -- values within the same bin must map to
+        # the same normalized color index, values in adjacent bins must not.
+        norm = viz._flood_count_norm
+        assert norm(0) != norm(1)
+        assert norm(1) == norm(2) == norm(3)
+        assert norm(3) != norm(4)
+        assert norm(4) == norm(5) == norm(7)
+        assert norm(7) != norm(8)
+        assert norm(8) == norm(30)  # "8+" is open-ended
+        assert viz._flood_count_cmap.N == 4
+
 
 class TestPlotFloodMap:
     def test_single_month(self, tmp_path):
@@ -217,6 +298,47 @@ class TestPlotFloodMap:
         fig = viz.plot_flood_map(fm, TILE_ID, month='202408')
 
         assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_single_panel_gets_readable_minimum_size(self, tmp_path):
+        # a single panel used to be scaled down as if it were one cell
+        # of a larger grid (2.6in wide), squeezing the colorbar/legend
+        # against the panel edge -- must now get a fixed, readable
+        # minimum size regardless of panel count.
+        fm = _make_flood_mapper(tmp_path)
+        data = np.array([[0, 1, 2, 255, 0]] * SIZE, dtype='uint8')
+        _write_monthly(fm, {'202408': data})
+
+        fig = viz.plot_flood_map(fm, TILE_ID, month='202408')
+
+        width, height = fig.get_size_inches()
+        assert width >= 4.5
+        assert height >= 4.5
+        plt.close(fig)
+
+    def test_discrete_colormap_has_four_classes(self, tmp_path):
+        fm = _make_flood_mapper(tmp_path)
+        data = np.array([[0, 2, 5, 255, 9]] * SIZE, dtype='uint8')
+        _write_monthly(fm, {'202408': data})
+
+        fig = viz.plot_flood_map(fm, TILE_ID, month='202408')
+
+        image_ax = next(ax for ax in fig.axes if ax.get_images())
+        img = image_ax.get_images()[0]
+        assert img.cmap.N == 4
+        assert isinstance(img.norm, type(viz._flood_count_norm))
+        plt.close(fig)
+
+    def test_legend_shows_four_class_labels(self, tmp_path):
+        fm = _make_flood_mapper(tmp_path)
+        data = np.array([[0, 2, 5, 255, 9]] * SIZE, dtype='uint8')
+        _write_monthly(fm, {'202408': data})
+
+        fig = viz.plot_flood_map(fm, TILE_ID, month='202408')
+
+        legend_ax = next(ax for ax in fig.axes if ax.get_legend() is not None)
+        legend_labels = [t.get_text() for t in legend_ax.get_legend().get_texts()]
+        assert legend_labels == ['0', '1-3', '4-7', '8+', 'Masked / no data']
         plt.close(fig)
 
     def test_all_months_grid(self, tmp_path):

@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.1.0a25
+
+Four fixes to `autofloods.visualize`, found via actual rendered
+output/measurement, not assumed.
+
+**Fixed a real memory issue in `plot_scenes_and_floods()`.**
+Investigated first (per this codebase's established practice): reading
+was already correct and one-scene-at-a-time (no upfront-list bug); a
+real tracemalloc/RSS measurement showed the growth was matplotlib
+itself retaining every panel's full-resolution array for the returned
+`Figure`'s lifetime -- confirmed by measuring memory drop back to
+baseline immediately after `plt.close(fig)`. At 1200x1200px synthetic
+scenes (a scaled stand-in for real ~3500x3500px tiles), 30 scenes
+peaked at **1358MB**; extrapolated to real tile resolution, ~11-19GB
+for 30-50 scenes. Fixed by downsampling each panel to a new
+`thumbnail_max_size=400` (default, longer side in pixels) BEFORE
+rendering -- block-mean for the RGB composite (raw scene is transient
+either way; only the size of what's retained by the Figure matters),
+a decimated `rasterio` read straight from disk for the flood raster
+(never materializes full resolution at all). Re-measured after the
+fix: same 30-scene case now peaks at **187MB** -- a ~7.3x reduction,
+matching the predicted 150-250MB range.
+
+**Fixed the shared legend overlapping the last row of image panels**
+in `plot_scenes_and_floods()` (confirmed via a real rendered
+screenshot, not just "no error"). Root cause: the legend was a
+floating `fig.legend()` with no space reserved for it by
+`constrained_layout`. Fixed by drawing it in its own dedicated
+`GridSpec` row instead (a real subplot slot, not a floating artist),
+so its space is now genuinely reserved regardless of scene count --
+verified both visually and with a new geometric test asserting the
+legend's bounding box never extends above the lowest image panel's box.
+
+**Fixed `plot_flood_map()`'s single-panel sizing and squeezed
+colorbar.** A single month (or `month=` given directly) was scaled
+down as if it were one cell of a larger grid (2.6in), with a
+`fraction=0.03` colorbar sized for a wide multi-panel row -- both
+illegibly small. Fixed with a fixed readable minimum figure size
+(floor of 4.5in) regardless of panel count, and (see next item)
+replaced the squeezed colorbar with a properly-spaced legend.
+
+**Replaced `plot_flood_map()`'s continuous color scale with a discrete
+4-class one**: **0**, **1-3**, **4-7**, **8+** flood-days, via a
+`ListedColormap`+`BoundaryNorm` (same categorical pattern already used
+for `plot_scenes_and_floods()`'s flood-classification panels, for
+consistency) with a clearly labeled legend instead of a raw numeric
+colorbar. Nodata (255) handling unchanged -- masked gray, excluded
+from the class scale entirely.
+
+Full test suite: 213 passing (8 new tests: legend-overlap geometry,
+downsampling behavior for both the RGB composite and the flood-raster
+decimated read, the 4-class bin-boundary logic, and the single-panel
+sizing/discrete-colormap/legend-label checks for `plot_flood_map()`).
+
 ## 0.1.0a24
 
 **Breaking change**: `grid.generate_grid()` no longer accepts a

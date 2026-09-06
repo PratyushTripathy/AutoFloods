@@ -334,4 +334,17 @@ means a real change in flood state, not a rescaled color map. Pass
 `max_scenes` to cap how many (chronologically earliest) scenes are
 rendered; the figure's title reports how many were shown and, if any
 were skipped (either by the cap or because that scene has no matching
-flood raster on disk yet), how many and why.
+flood raster on disk yet), how many and why. Each panel is downsampled
+(block-mean for the RGB composite, a decimated nearest-neighbor read
+straight from disk for the flood raster) to `thumbnail_max_size`
+(default 400px on the longer side) before rendering -- a panel here is
+only ever a couple hundred pixels on screen, so feeding it real
+~3500x3500 tile-resolution data would otherwise retain multiple
+gigabytes for the whole life of the returned figure at high scene
+counts, for no visual benefit.
+
+`plot_flood_map()` shows the per-pixel flood-day count as a discrete
+4-class scale -- **0**, **1-3**, **4-7**, **8+** -- rather than a
+continuous numeric color scale, with one shared legend (not a
+colorbar) labeling all four classes plus masked/no-data, easier to
+read at a glance than a raw count.
