@@ -40,34 +40,35 @@ class TestMPCSourceAuthenticate:
         _, kwargs = mock_open.call_args
         assert "timeout" not in kwargs
 
-    def test_authenticate_sets_subscription_key_when_provided(self):
-        with patch("autofloods.sources.mpc.pystac_client.Client.open") as mock_open, \
-             patch("planetary_computer.settings.set_subscription_key") as mock_set_key:
-            src = MPCSource(subscription_key="fake-key-123")
-            src.authenticate()
-
-        mock_set_key.assert_called_once_with("fake-key-123")
-        assert mock_open.called
-
-    def test_authenticate_proceeds_anonymously_without_key(self):
+    def test_authenticate_never_touches_subscription_key(self):
+        """
+        MPC subscription keys are no longer obtainable (the issuing
+        developer portal was retired) -- authenticate() must always
+        proceed anonymously and never call set_subscription_key(),
+        regardless of the deprecated subscription_key argument.
+        """
         with patch("autofloods.sources.mpc.pystac_client.Client.open") as mock_open, \
              patch("planetary_computer.settings.set_subscription_key") as mock_set_key, \
-             patch.dict("os.environ", {}, clear=True):
-            src = MPCSource(subscription_key=None)
+             pytest.warns(DeprecationWarning):
+            src = MPCSource(subscription_key="fake-key-123")
             src.authenticate()
 
         mock_set_key.assert_not_called()
         assert mock_open.called
 
-    def test_subscription_key_falls_back_to_env_var(self):
-        with patch.dict("os.environ", {"MPC_SUBSCRIPTION_KEY": "env-key"}, clear=True):
-            src = MPCSource()
-        assert src._subscription_key == "env-key"
+    def test_subscription_key_none_is_default_and_warns_nothing(self, recwarn):
+        src = MPCSource()
+        assert len(recwarn) == 0
+        with patch("autofloods.sources.mpc.pystac_client.Client.open") as mock_open, \
+             patch("planetary_computer.settings.set_subscription_key") as mock_set_key:
+            src.authenticate()
 
-    def test_explicit_key_overrides_env_var(self):
-        with patch.dict("os.environ", {"MPC_SUBSCRIPTION_KEY": "env-key"}, clear=True):
-            src = MPCSource(subscription_key="explicit-key")
-        assert src._subscription_key == "explicit-key"
+        mock_set_key.assert_not_called()
+        assert mock_open.called
+
+    def test_passing_subscription_key_emits_deprecation_warning(self):
+        with pytest.warns(DeprecationWarning, match="subscription_key"):
+            MPCSource(subscription_key="explicit-key")
 
     def test_authenticate_sets_catalog(self):
         fake_catalog = MagicMock()

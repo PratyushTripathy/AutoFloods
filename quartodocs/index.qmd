@@ -15,10 +15,12 @@ standard deviation) is fit per tile, and wet-season scenes are flagged
 flooded wherever backscatter drops significantly below that baseline,
 with a terrain-slope mask to suppress false positives on steep ground.
 
-To scale to large areas reliably, the workflow processes one AOI
-("tile") at a time rather than one country- or state-scale mosaic --
-see `flood_mapper` in the [API reference](reference/index.qmd) for the
-per-tile pipeline this drives.
+The workflow is tiled by design: each AOI is processed as its own
+independent unit rather than one large country- or state-scale mosaic,
+so a run over any number of tiles scales by adding more of the same
+unit of work -- see `flood_mapper` in the
+[API reference](reference/index.qmd) for the per-tile pipeline this
+drives.
 
 ## Data sources
 
@@ -28,9 +30,7 @@ implementations:
 
 - **`MPCSource`** -- Microsoft Planetary Computer, the original backend.
 - **`OPERASource`** -- NASA's OPERA RTC-S1 product via ASF/CMR, hosted on
-  AWS. Native 30m resolution; reads via a download-then-open pattern
-  rather than streaming, which has proven substantially more reliable
-  under sustained/concurrent load in this project's own testing.
+  AWS. Native 30m resolution.
 
 Swap between them (or add a new source) via the `source=` argument to
 `flood_mapper` -- see [Getting Started](getting-started.qmd).
@@ -48,8 +48,7 @@ pip install -e .
 ```
 
 See `pyproject.toml` for the pinned dependency list. `MPCSource` needs no
-credentials for typical use (a subscription key is optional, raising the
-request rate limit); `OPERASource` requires a NASA Earthdata Login entry
+credentials at all; `OPERASource` requires a NASA Earthdata Login entry
 in `~/.netrc`. See [Getting Started](getting-started.qmd#authentication)
 for setup steps.
 

@@ -2,7 +2,7 @@ AutoFloods is a Python package for automated flood mapping at scale from Sentine
 
 ## Quickstart
 
-OPERASource requires a free NASA Earthdata Login; MPCSource works with no credentials at all (a free subscription key just raises rate limits) — see [Authentication](https://autofloods.readthedocs.io/en/latest/getting-started.html#authentication).
+OPERASource requires a free NASA Earthdata Login; MPCSource needs no credentials at all — see [Authentication](https://autofloods.readthedocs.io/en/latest/getting-started.html#authentication).
 
 <!-- TODO: drop --pre once a stable (non-alpha/beta) 0.1.0 release exists -->
 Pre-release: `pip install --pre autofloods`

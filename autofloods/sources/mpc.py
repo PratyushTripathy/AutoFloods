@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-import os
+import warnings
 from urllib.parse import urlsplit, urlunsplit
 
 import geopandas as gpd
@@ -27,13 +27,13 @@ class MPCSource(STACSource):
     """
     Microsoft Planetary Computer (MPC) implementation of STACSource.
 
-    MPC's STAC search and asset signing both work anonymously. A
-    subscription key is optional -- it only raises the request rate
-    limit, it is never required for search or download. If no key is
-    passed explicitly, the MPC_SUBSCRIPTION_KEY environment variable is
-    used if set; otherwise access proceeds anonymously. A missing key
-    never raises an error here, matching planetary_computer.sign_inplace's
-    own default behavior.
+    MPC's STAC search and asset signing both work anonymously -- no
+    credentials are needed or supported. Anonymous access carries lower
+    rate limits and shorter-lived access tokens than an authenticated
+    key would, which can cause failures on large concurrent runs.
+    Microsoft's subscription keys, which formerly raised those limits,
+    are no longer obtainable: the developer portal that issued them was
+    retired.
     """
 
     def __init__(
@@ -48,9 +48,12 @@ class MPCSource(STACSource):
         """
         Parameters
         ----------
-        subscription_key : MPC API subscription key, or None for
-                            anonymous access (falls back to the
-                            MPC_SUBSCRIPTION_KEY env var, then anonymous).
+        subscription_key : Deprecated, no-op. MPC subscription keys are
+                            no longer obtainable (the issuing developer
+                            portal was retired); passing a non-None
+                            value here emits a DeprecationWarning and is
+                            otherwise ignored. Kept only so existing
+                            code that passes this argument doesn't break.
         collection        : STAC collection ID for Sentinel-1 RTC search.
         vv_asset_key      : Asset dict key for the VV band on each item.
         vh_asset_key      : Asset dict key for the VH band on each item.
@@ -63,7 +66,15 @@ class MPCSource(STACSource):
         needing a new subclass. A source with genuinely different search
         or auth mechanics still belongs in its own STACSource subclass.
         """
-        self._subscription_key = subscription_key or os.environ.get("MPC_SUBSCRIPTION_KEY")
+        if subscription_key is not None:
+            warnings.warn(
+                "MPCSource's subscription_key parameter is deprecated and has no "
+                "effect -- MPC subscription keys are no longer obtainable, since "
+                "the developer portal that issued them was retired. MPC access is "
+                "always anonymous now. This argument will be removed in a future "
+                "release.",
+                DeprecationWarning, stacklevel=2,
+            )
         self._collection = collection
         self._vv_asset_key = vv_asset_key
         self._vh_asset_key = vh_asset_key
@@ -73,15 +84,6 @@ class MPCSource(STACSource):
 
     def authenticate(self) -> None:
         import planetary_computer
-
-        if self._subscription_key:
-            planetary_computer.settings.set_subscription_key(self._subscription_key)
-        else:
-            logger.info(
-                "No MPC subscription key set (MPC_SUBSCRIPTION_KEY not found); "
-                "proceeding with anonymous access. This works fine at low "
-                "volume, but a key raises your rate limit for large-scale runs."
-            )
 
         # No timeout= here: pinned pystac-client==0.6.1's Client.open()
         # doesn't accept one (added in a later release) -- passing it

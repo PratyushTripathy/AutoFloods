@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.1.0a27
+
+**Documentation correction: Microsoft Planetary Computer subscription
+keys are no longer obtainable.** The developer portal that issued them
+has been retired, so every mention of getting a free key to raise
+MPC's request rate limit was stale and pointed users to a dead
+process. `getting-started.qmd`, `index.qmd`, and `PYPI_README.md` now
+say plainly that `MPCSource` needs no credentials at all, and note that
+anonymous access carries lower rate limits and shorter-lived access
+tokens than a key would have, which can cause failures on large
+concurrent runs -- with no workaround via a key, since none can be
+issued anymore.
+
+**Removed the `MPCSource` subscription-key code path** to match:
+`authenticate()` no longer reads the `MPC_SUBSCRIPTION_KEY` environment
+variable or calls `planetary_computer.settings.set_subscription_key()`
+-- both dead code now that no key can exist. The `subscription_key`
+constructor parameter is retained as a deprecated no-op (passing a
+non-`None` value emits a `DeprecationWarning` and is otherwise ignored)
+so existing code that passes this argument doesn't break.
+
+Also trimmed `getting-started.qmd`'s `OPERASource` setup section (cut
+the paragraph explaining `setup_earthdata_login()`'s internals; reduced
+the manual `~/.netrc` alternative to the entry format plus `chmod`) and
+`index.qmd`'s `OPERASource` data-source bullet (cut the download-then-
+open-vs-streaming implementation rationale, which is not something a
+user needs to know to use the package). Reworded `index.qmd`'s Overview
+paragraph on per-AOI tiled processing to describe it as the workflow's
+design, not a workaround for a reliability limitation.
+
+Committed the manuscript-work measurement scripts and configs
+(`scripts/verification/manuscript_*.py`,
+`scripts/configs/manuscript_*/`, `scripts/run_manuscript_profile.sbatch`)
+as permanent, reproducible tooling -- they produced the real
+before/after memory and wall-clock numbers cited for 0.1.0a26's
+`read_scenes()`/`merge_floods_by_date()` fixes, so they should stay
+runnable rather than be discarded as scratch work. Updated the same
+`BASE = pathlib.Path(__file__).resolve().parents[2]` repo-relative path
+convention already used by every other `scripts/verification/*.py`
+script, replacing the hardcoded absolute path they were written with.
+
+Full test suite: 227 passing (net -1 from 0.1.0a26: the 4 old
+subscription-key tests in `TestMPCSourceAuthenticate` were replaced
+with 3 new ones covering the deprecated-no-op behavior).
+
 ## 0.1.0a26
 
 **Correctness fix: per-scene flood raster filenames could collide for
