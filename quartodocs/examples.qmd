@@ -55,16 +55,6 @@ fishnet_grid['dry_month'] = '04,05'  # same value for every tile
 fishnet_grid.to_file('resources/my_fishnet_grid.gpkg')
 ```
 
-**Breaking change**: `generate_grid()`'s `dry_months` parameter has
-been **removed** -- it always leaves the column as the `"REQUIRED"`
-placeholder now, regardless of how many tiles are generated. If your
-script calls `generate_grid(..., dry_months='04,05')`, drop that
-argument and set the column afterward as shown above; passing it now
-raises `TypeError`. `flood_mapper`'s own `grid_dry_months=` parameter
-(Option 1 below) is unaffected -- it still stamps one value across
-every tile, just via the grid's `dry_month` column directly, after
-`generate_grid()` returns, rather than inside `generate_grid()` itself.
-
 Both UTM zone hemispheres are supported: an AOI straddling the equator
 produces tiles in the correct Northern/Southern UTM zone for each
 tile's own centroid (see `generate_grid`'s docstring in the [API
@@ -162,14 +152,7 @@ without re-running `prepare_wet_scenes()`** -- it just re-reads the same
 cached scenes and overwrites its own classified output, so re-tuning
 thresholds doesn't require re-downloading or re-reprojecting anything.
 
-**Breaking change (0.1.0a19)**: `map_floods()`'s `export_raster`
-parameter has been removed -- every scene's classified raster is now
-always written to disk (there's no longer an in-memory result to keep
-around if it weren't). If you have an existing script that calls
-`fm.map_floods(..., export_raster=False)` or `export_raster=True`,
-drop that argument -- passing it now raises `TypeError`.
-
-**Renamed (0.1.0a26, deprecated not removed)**: `map_floods()`'s
+**Renamed (deprecated, not removed)**: `map_floods()`'s
 `rel_slope_thd` parameter is now `slope_thd` -- the value it's
 compared against is a flat absolute per-pixel slope cutoff in degrees
 (see `preprocessing.compute_slope()`), nothing normalized against a
