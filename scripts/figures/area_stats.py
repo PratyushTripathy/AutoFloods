@@ -4,7 +4,7 @@ Not part of the autofloods package.
 
 For each year's mosaic, clips to the Bihar state boundary first (in the
 mosaic's native, equal-area Mollweide CRS -- the same cutline
-fig_bihar_floods.py uses for Figure 3), then computes total flooded area
+bihar_floods.py uses for Figure 3), then computes total flooded area
 (sq km) as the area of pixels flagged as flooded (count >= 1) in at least
 one wet-season month, using the mosaic's own per-pixel area in its
 equal-area (Mollweide) projection -- see mosaic_tiles.py's docstring for
@@ -22,10 +22,10 @@ see scripts/figures/_boundaries.py's docstring for where to get it and
 where to put it (or set AUTOFLOODS_BOUNDARY_DIR).
 
 Usage:
-    python scripts/figures/fig_area_stats.py
+    python scripts/figures/area_stats.py
 Writes:
-    figures/fig_area_stats.pdf (vector)
-    figures/fig_area_stats.png (300 DPI raster)
+    figures/area_stats.pdf (vector)
+    figures/area_stats.png (300 DPI raster)
 """
 import os
 import sys
@@ -92,8 +92,8 @@ ax.set_axisbelow(True)
 
 plt.tight_layout()
 os.makedirs(OUT_DIR, exist_ok=True)
-pdf_path = os.path.join(OUT_DIR, 'fig_area_stats.pdf')
-png_path = os.path.join(OUT_DIR, 'fig_area_stats.png')
+pdf_path = os.path.join(OUT_DIR, 'area_stats.pdf')
+png_path = os.path.join(OUT_DIR, 'area_stats.png')
 fig.savefig(pdf_path, bbox_inches='tight')
 fig.savefig(png_path, dpi=300, bbox_inches='tight')
 print(f'Wrote {pdf_path}')

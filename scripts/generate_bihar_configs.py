@@ -13,7 +13,7 @@ CONFIG_DIR = f'{BASE}/scripts/configs/bihar_opera'
 
 # 19 tiles that actually intersect Bihar's boundary. Tiles 323, 328, and 331
 # sit entirely outside Bihar in neighbouring states and are excluded from
-# the analysis entirely (see scripts/figures/fig_grid.py).
+# the analysis entirely (see scripts/figures/grid.py).
 TILES = [274, 275, 276, 277, 313, 314, 315, 316, 317, 318, 319, 320,
          321, 322, 324, 325, 326, 329, 330]
 

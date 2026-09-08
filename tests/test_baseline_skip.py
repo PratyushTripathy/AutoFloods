@@ -15,7 +15,7 @@ Network- and GDAL-reprojection-heavy calls (preprocessing.reproject_
 clip_stac, preprocessing.compute_dry_baseline_stats) are monkeypatched
 out with small synthetic, CRS-bearing DataArrays -- this test is about
 generate_mean_std_by_aoi()'s own control flow, not about real Sentinel-1
-reprojection (see fig_bihar_floods.py's end-to-end OtsuDetector run,
+reprojection (see bihar_floods.py's end-to-end OtsuDetector run,
 reported separately, for that).
 """
 import os

@@ -31,9 +31,10 @@ gate -- this script refuses to render if the check fails):
     date (984,345 high-confidence pixels in both)
 
 Usage:
-    python scripts/figures/fig_kosi_example.py
+    python scripts/figures/kosi_example.py
 Writes:
-    figures/fig_kosi_example.png (300 DPI raster)
+    figures/kosi_example.png (300 DPI raster)
+    figures/kosi_example.pdf (vector)
 """
 import os
 import sys
@@ -49,7 +50,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from autofloods.visualize import _rgb_composite
 
 BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OUT_DIR = '/home/emlab/projects/current-projects/edge-autofloods/autofloods-manuscript/figures'
+# autofloods-manuscript is a sibling repo to this one (see CLAUDE.md),
+# not a subdirectory -- derived relative to BASE rather than a full
+# absolute path hardcoded to one machine's directory layout.
+OUT_DIR = os.path.join(os.path.dirname(BASE), 'autofloods-manuscript', 'figures')
 
 TILE_ID = 321
 DATE = '20200729'
@@ -113,25 +117,30 @@ left, bottom, right, top = bounds
 extent = (left, right, bottom, top)
 
 # ---------------------------------------------------------- colormaps
+# ColorBrewer values, chosen so lightness decreases monotonically
+# within each panel (survives greyscale reproduction) and so panels
+# (b) and (c) share no hue (separable under colour-vision deficiency,
+# and don't read as the same kind of scale despite sitting side by
+# side -- they encode unrelated things: per-date detection confidence
+# vs. a monthly flood-day-count bin). Masked/no-data, if present in
+# either panel, is #BDBDBD -- distinct from the near-white "0"/"not
+# flooded" background class.
+#
 # Panel (b): not-flooded stays neutral; VV-only and VH-only (both
 # "low confidence") share one color instead of two similar shades,
 # since the distinction barely reads visually and isn't worth two
-# legend entries; high-confidence flood is a dark navy. A blue-only
-# scheme, distinct from panel (c)'s orange/red escalation -- (b) and
-# (c) sitting side by side with the SAME orange/red invited reading
-# them as the same kind of scale, when they encode unrelated things
-# (per-date detection confidence vs. a monthly flood-day-count bin).
-_CAT_COLORS = ['#f0f0f0', '#74a9cf', '#74a9cf', '#045a8d']
+# legend entries. Blue only.
+_CAT_COLORS = ['#EFEFEF', '#6BAED6', '#6BAED6', '#08306B']
 _FLOOD_CLASS_LABELS = {0: 'Not flooded', 1: 'Low confidence (VV- or VH-only)', 3: 'High-confidence flood'}
-_MASKED_COLOR = 'lightgray'
+_MASKED_COLOR = '#BDBDBD'
 _flood_cmap = ListedColormap(_CAT_COLORS)
 _flood_cmap.set_bad(_MASKED_COLOR)
 _flood_norm = BoundaryNorm(boundaries=[-0.5, 0.5, 1.5, 2.5, 3.5], ncolors=4)
 
-# Panel (c): blue -> orange -> red escalation, kept distinct from
-# panel (b)'s all-blue scheme above -- see that comment.
+# Panel (c): yellow -> orange -> red escalation, off blue entirely so
+# it shares no hue with panel (b) above.
 _COUNT_BIN_LABELS = ['0', '1-3', '4-7', '8+']
-_COUNT_BIN_COLORS = ['#f0f0f0', '#3182bd', '#fd8d3c', '#e31a1c']
+_COUNT_BIN_COLORS = ['#EFEFEF', '#FED976', '#FD8D3C', '#BD0026']
 _count_cmap = ListedColormap(_COUNT_BIN_COLORS)
 _count_cmap.set_bad(_MASKED_COLOR)
 _count_norm = BoundaryNorm(boundaries=[-0.5, 0.5, 3.5, 7.5, 1e6], ncolors=4)
@@ -304,6 +313,9 @@ leg_c_ax.legend(handles=count_handles, loc='upper center', ncol=2, frameon=False
                  title='Flood-day count', title_fontsize=8)
 
 os.makedirs(OUT_DIR, exist_ok=True)
-png_path = os.path.join(OUT_DIR, 'fig_kosi_example.png')
+png_path = os.path.join(OUT_DIR, 'kosi_example.png')
+pdf_path = os.path.join(OUT_DIR, 'kosi_example.pdf')
 fig.savefig(png_path, dpi=300, bbox_inches='tight')
+fig.savefig(pdf_path, bbox_inches='tight')
 print(f'wrote {png_path}')
+print(f'wrote {pdf_path}')

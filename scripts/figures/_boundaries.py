@@ -1,6 +1,6 @@
 """
-Shared boundary-file resolution for scripts/figures/fig_grid.py and
-fig_bihar_floods.py. Not part of the autofloods package.
+Shared boundary-file resolution for scripts/figures/grid.py and
+bihar_floods.py. Not part of the autofloods package.
 
 resources/boundaries/{india,india_states,bihar}_outline.gpkg are NOT
 committed to this repo (they're derived from a private internal project's

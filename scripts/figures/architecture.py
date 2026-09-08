@@ -9,10 +9,10 @@ implementations, the shared backend-agnostic pipeline path, and which
 artifacts are cached to disk vs recomputed per run.
 
 Usage:
-    python scripts/figures/fig_architecture.py
+    python scripts/figures/architecture.py
 Writes:
-    figures/fig_architecture.pdf (vector, for the manuscript)
-    figures/fig_architecture.png (300 DPI raster preview)
+    figures/architecture.pdf (vector, for the manuscript)
+    figures/architecture.png (300 DPI raster preview)
 """
 import os
 
@@ -164,8 +164,8 @@ ax.legend(handles=legend_elems, loc='lower right', bbox_to_anchor=(0.995, -0.01)
 
 plt.tight_layout()
 os.makedirs(OUT_DIR, exist_ok=True)
-pdf_path = os.path.join(OUT_DIR, 'fig_architecture.pdf')
-png_path = os.path.join(OUT_DIR, 'fig_architecture.png')
+pdf_path = os.path.join(OUT_DIR, 'architecture.pdf')
+png_path = os.path.join(OUT_DIR, 'architecture.png')
 fig.savefig(pdf_path, bbox_inches='tight')
 fig.savefig(png_path, dpi=300, bbox_inches='tight')
 print(f'Wrote {pdf_path}')

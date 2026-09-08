@@ -18,9 +18,9 @@ see scripts/figures/_boundaries.py's docstring for where to get it and
 where to put it (or set AUTOFLOODS_BOUNDARY_DIR).
 
 Usage:
-    python scripts/figures/fig_bihar_floods.py
+    python scripts/figures/bihar_floods.py
 Writes:
-    figures/fig_bihar_floods.png (300 DPI raster -- map figure; PNG only, no PDF)
+    figures/bihar_floods.png (300 DPI raster -- map figure; PNG only, no PDF)
 """
 import os
 import sys
@@ -256,7 +256,7 @@ last_ax.text(bar_x0 + bar_frac / 2, bar_y0 + 0.03, f'{bar_km} km', ha='center',
              clip_on=False)
 
 os.makedirs(OUT_DIR, exist_ok=True)
-png_path = os.path.join(OUT_DIR, 'fig_bihar_floods.png')
+png_path = os.path.join(OUT_DIR, 'bihar_floods.png')
 fig.savefig(png_path, dpi=300, bbox_inches='tight')
 print(f'Wrote {png_path}')
 
