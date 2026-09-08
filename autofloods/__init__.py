@@ -411,8 +411,16 @@ class flood_mapper():
         "04,05" -> [4, 5]) into self.dry_months, after dropping any AOI in
         already_processed_aoi_ids -- so an AOI whose baseline is already
         done contributes nothing to generate_dry_date_ranges()'s combined
-        date range. Sets self.aoi_ids_to_process (the AOIs actually
-        being (re)computed this run) as a side effect.
+        date range.
+
+        Sets
+        ----
+        self.aoi_ids_to_process : list
+            AOI IDs actually being (re)computed this run -- every
+            requested ID minus already_processed_aoi_ids.
+        self.dry_months : dict
+            {aoi_id: [month_int, ...]}, sorted, only for AOIs in
+            aoi_ids_to_process, e.g. {321: [4, 5]}.
         """
 
         gdf = gpd.read_file(self.grid_shapefile_path)
@@ -451,6 +459,16 @@ class flood_mapper():
         production pattern -- see scripts/bihar2024_tile.py); worth
         knowing if you pass grid_id_list with AOIs on very different
         dry-season calendars.
+
+        Sets
+        ----
+        self.dry_dates : list
+            One (start_date, end_date) tuple per year in dry_years,
+            covering the union of every AOI's dry months. `[]` (empty)
+            if every requested AOI was already fully processed (see
+            self.dry_months, set by get_dry_dates()) -- downstream
+            get_s1_items(dry_wet='dry')/read_scenes(dry_wet='dry') then
+            run as harmless no-ops on that empty range.
         """
 
         if not self.dry_months:
@@ -503,9 +521,32 @@ class flood_mapper():
         for dry_dates or wet_dates (per `dry_wet`), then split the results
         back out per-AOI via generate_scene_aoi_dict() -- one combined
         search rather than one per AOI, since AOIs in the same batch
-        typically have overlapping/adjacent footprints. Sets
-        self.dry_s1_scenes/self.wet_s1_scenes (flat list, after
-        generate_scene_aoi_dict() runs) for read_scenes() to consume.
+        typically have overlapping/adjacent footprints.
+
+        Sets (dry_wet='dry' shown; dry_wet='wet' sets the wet_ equivalents)
+        ----
+        self.dry_s1_scenes : list
+            Flat list of found scenes (pystac.Item, or OperaPass for
+            OPERASource) -- NOT the raw dict this method builds
+            internally; generate_scene_aoi_dict() (called at the end of
+            this method) replaces it with this flat list, which is what
+            read_scenes() actually consumes.
+        self.dry_aoi_scene_dict : dict
+            {aoi_id: [scene_id, ...]} -- merged with any existing
+            on-disk cache (self.dry_aoi_scene_json_file) rather than
+            overwriting it, so scenes found in an earlier run for a
+            different date range stay recorded.
+        self.dry_scene_aoi_dict : dict
+            {scene_id: [aoi_id, ...]}, same merge behavior.
+        self.dry_skipped_ids : list
+            AOI IDs whose prior cache entry was replaced by this run's
+            (re-)search results.
+
+        Writes
+        ------
+        self.dry_aoi_scene_json_file, self.dry_scene_aoi_json_file
+            (or the wet_ equivalents) -- JSON mirrors of the two dicts
+            above, under self.resources_base (== output_dir when set).
         """
         if dry_wet == 'dry':
             dates = self.dry_dates
@@ -718,27 +759,51 @@ class flood_mapper():
         from the network exactly once and fanned out, not re-read per
         AOI. The cache is resumable: a scene already cached (from an
         earlier run, or one interrupted mid-tile) is loaded from disk
-        rather than re-read/re-reprojected. Sets self.dry_scene_paths/
-        self.wet_scene_paths: {aoi_id: {scene_id: path to that (AOI,
-        scene)'s cached .nc}}, and a private
-        self._dry_scene_valid_count_by_aoi/self._wet_scene_valid_count_by_aoi:
-        {aoi_id: 2D numpy int array}, a per-pixel count of scenes with a
-        VALID (non-NaN) observation, folded in one scene at a time --
-        generate_number_of_scenes() reads the wet one directly.
+        rather than re-read/re-reprojected.
 
         keep_intermediate_in_memory=True: unchanged, original behavior --
-        bulk concurrent read into self.s1_dry_dict/self.s1_wet_dict:
-        {scene_id: {'vv_ds':..., 'vh_ds':...}}, still in native CRS (see
-        preprocessing.read_sentinel1_stac), every scene resident at once.
-        For wet, prepare_wet_scenes() still separately builds
-        self.wet_scene_paths from this bulk dict afterward, exactly as
-        before -- map_floods() always reads scene_paths (file paths),
-        regardless of this flag.
+        bulk concurrent read, every scene resident at once, still in
+        native CRS (see preprocessing.read_sentinel1_stac). For wet,
+        prepare_wet_scenes() still separately builds self.wet_scene_paths
+        from this bulk dict afterward, exactly as before -- map_floods()
+        always reads scene_paths (file paths), regardless of this flag.
 
         Passes this run's combined AOI bounds (_aoi_union_bounds_4326())
         through to each raw read as a windowed-read hint -- MPCSource uses
         it to fetch only the intersecting portion of its COG assets over
         the network instead of the full scene; OPERASource ignores it.
+
+        Sets (dry_wet='dry' shown; dry_wet='wet' sets the wet_ equivalents)
+        ----
+        Default (keep_intermediate_in_memory=False):
+
+        self.dry_scene_paths : dict
+            {aoi_id: {scene_id: path to that (AOI, scene)'s cached
+            .nc}} -- what map_floods()/generate_mean_std_by_aoi()
+            actually read from; there is no in-memory array form in
+            this (default) path.
+        self._dry_scene_valid_count_by_aoi : dict (private)
+            {aoi_id: 2D numpy int array}, a per-pixel count of scenes
+            with a VALID (non-NaN) observation, folded in one scene at
+            a time. generate_number_of_scenes() reads the wet
+            equivalent of this directly.
+
+        keep_intermediate_in_memory=True:
+
+        self.s1_dry_dict : dict
+            {scene_id: {'vv_ds': DataArray, 'vh_ds': DataArray}},
+            native CRS, every scene resident at once. self.dry_scene_paths
+            is NOT set by this branch. generate_mean_std_by_aoi() deletes
+            this attribute once it's done with it (unless
+            keep_intermediate_in_memory is True, in which case it's left
+            resident for the rest of this instance's life).
+
+        Writes
+        ------
+        self.dry_scenes_cache_dir/self.wet_scenes_cache_dir : one
+            reprojected NetCDF per (AOI, scene) -- only in the default
+            (keep_intermediate_in_memory=False) path; nothing is written
+            to this cache directory when the flag is True.
         """
         resolved = self._resolve_concurrency(max_workers=max_workers, reproject_max_workers=reproject_max_workers)
         max_workers, reproject_max_workers = resolved['max_workers'], resolved['reproject_max_workers']
@@ -1030,6 +1095,34 @@ class flood_mapper():
         by this same reproject_max_workers value (now governing
         concurrent cache-file loads rather than reprojections, since
         reprojection already happened at cache-write time).
+
+        Sets
+        ----
+        self.mean_std_by_aoi : dict
+            {aoi_id: DataArray}, for every AOI in self.selected_grid_id
+            -- both newly fit this call AND any already-processed AOI
+            reloaded from disk (load_mean_std_by_aoi(), called at the
+            end of this method). If self.detector.requires_baseline_fitting
+            is True (the normal case), each DataArray is a real Z-score
+            baseline (band=['vv_mean', 'vv_std', 'vh_mean', 'vh_std']).
+            If False, it's instead just compute_dry_baseline_stats()'s
+            'grid_ref' array -- a CRS/grid reference, NOT a statistical
+            baseline; do not read its pixel values as mean/std.
+
+        Writes
+        ------
+        self.nc_outfile pattern (mean_std/<dry_year_begin>_<dry_year_end>_
+            <id>_vv_vh_mean_std.nc) : one NetCDF per newly-fit AOI --
+            only when requires_baseline_fitting is True. AOIs reloaded
+            from disk via load_mean_std_by_aoi() aren't rewritten.
+
+        Deletes
+        -------
+        self.s1_dry_dict, if present (i.e. keep_intermediate_in_memory
+            was True during read_scenes()) -- deleted (with gc.collect())
+            at the end of this call, UNLESS keep_intermediate_in_memory
+            is True, in which case it's left resident for the rest of
+            this flood_mapper instance's life.
         """
         reproject_max_workers = self._resolve_concurrency(
             reproject_max_workers=reproject_max_workers)['reproject_max_workers']
@@ -1168,6 +1261,22 @@ class flood_mapper():
         -- separate from the CPU-bound reprojection thread pools
         elsewhere in this class. Defaults to None, resolved to
         DEFAULT_MAX_WORKERS (2) if left unset.
+
+        Sets
+        ----
+        self.slope : dict
+            {aoi_id: DataArray}, one entry per AOI in self.selected_grid_id
+            (freshly computed for AOIs that needed a DEM download, reloaded
+            from `slope_dir` for AOIs that already had one cached) --
+            DELETED (with gc.collect()) at the end of this call unless
+            keep_intermediate_in_memory is True, in which case it's left
+            resident and map_floods() reads it directly instead of
+            re-reading from disk.
+
+        Writes
+        ------
+        self.slope_dir/slope_aoi_<id>.nc : one NetCDF per AOI, only for
+            AOIs that didn't already have one cached (slope_id_to_process).
         """
         max_workers = self._resolve_concurrency(max_workers=max_workers)['max_workers']
         slope_id_to_process = [
@@ -1282,6 +1391,36 @@ class flood_mapper():
         resolved to DEFAULT_MAX_WORKERS (2) if left unset -- see that
         constant's module-level comment for the memory/throughput
         tradeoff this default was measured against.
+
+        Sets
+        ----
+        Also sets everything get_s1_items(dry_wet='wet') sets
+        (self.wet_s1_scenes, self.wet_aoi_scene_dict, etc. -- see that
+        method's own Sets section) as an internal first step.
+
+        self.wet_scene_paths : dict
+            {aoi_id: {scene_id: path to that (AOI, scene)'s cached
+            .nc}} -- what map_floods() actually reads from. Set either
+            by read_scenes() directly (default path) or by this
+            method's own reproject+cache loop (keep_intermediate_in_memory
+            path) -- present either way once this call returns.
+        self._wet_scene_valid_count_by_aoi : dict (private)
+            {aoi_id: 2D numpy int array}, a per-pixel count of scenes
+            with a VALID (non-NaN) observation. generate_number_of_scenes()
+            reads this directly.
+
+        keep_intermediate_in_memory=True only: self.s1_wet_dict (set by
+        the internal read_scenes() call, {scene_id: {'vv_ds':...,
+        'vh_ds':...}}, native CRS, every wet scene resident at once)
+        remains set on this instance after this method returns --
+        unlike self.s1_dry_dict (deleted by generate_mean_std_by_aoi()),
+        nothing in this pipeline currently deletes self.s1_wet_dict.
+
+        Writes
+        ------
+        self.wet_scenes_cache_dir/wetscene_<aoi_id>_<scene_id>.nc : one
+            reprojected NetCDF per (AOI, scene), regardless of
+            keep_intermediate_in_memory.
         """
         resolved = self._resolve_concurrency(max_workers=max_workers, reproject_max_workers=reproject_max_workers)
         max_workers, reproject_max_workers = resolved['max_workers'], resolved['reproject_max_workers']
@@ -1362,12 +1501,14 @@ class flood_mapper():
                             in_flight.add(executor.submit(_process_one_scene, *next_item))
 
             # self.s1_wet_dict (every wet-season scene's raw VV/VH arrays)
-            # is never read again after the reproject loop above -- same
-            # leak class as self.s1_dry_dict (fixed in 0.1.0a17), just
-            # never patched on the wet side until now.
-            if not self.keep_intermediate_in_memory:
-                del self.s1_wet_dict
-                gc.collect()
+            # is never read again after the reproject loop above, but is
+            # deliberately NOT deleted here: this whole branch only runs
+            # when keep_intermediate_in_memory is True (that's the only
+            # way s1_wet_dict gets created at all -- see read_scenes()),
+            # so a "delete unless keep_intermediate_in_memory" guard
+            # inside it can never fire. It stays resident for the rest
+            # of this flood_mapper instance's life, matching the
+            # documented tradeoff for that flag.
         # else: default path -- read_scenes() already built
         # self.wet_scene_paths/self._wet_scene_valid_count_by_aoi
         # directly via its own bounded read+reproject+cache pipeline.
@@ -1385,11 +1526,8 @@ class flood_mapper():
         Classify every wet-season scene against its AOI's baseline
         (self.detector.detect()), apply the slope mask if the detector
         needs one, and export each scene's classified flood raster to
-        disk one at a time. Sets self.flood_dict: {aoi_id: {scene_id:
-        path to that scene's exported classified .tif}} -- a dict of
-        file paths, not arrays (0/1/2/3 encoding -- see
-        detectors.ZScoreDetector -- baked into the exported raster's
-        pixel values).
+        disk one at a time (0/1/2/3 encoding -- see detectors.ZScoreDetector
+        -- baked into the exported raster's pixel values).
 
         slope_thd defaults to 15 (degrees), matching Global Flood
         Mapper -- the method AutoFloods inherits its detection approach
@@ -1448,6 +1586,27 @@ class flood_mapper():
         published Bihar production record only because that run used
         export_raster=False -- see tests.test_map_floods_filenames for
         the regression coverage).
+
+        Sets
+        ----
+        self.flood_dict : dict
+            {aoi_id: {scene_id: path to that scene's exported classified
+            .tif}} -- a dict of file paths, not arrays. Always set,
+            regardless of export_vector/export_maps.
+        self.flood_gdf_dict : dict, only if export_vector=True
+            {aoi_id: {scene_id: GeoDataFrame}} -- one entry per scene
+            that had at least one high-confidence-flood (class 3) cell;
+            a scene with none is skipped (printed, not added).
+
+        Writes
+        ------
+        output_base/flood_raster/floodextent_DRY_<...>_WET_<...>_<id>_
+            <sanitized_scene_id>.tif : one per scene, always.
+        output_base/flood_vector/floodextent_..._<sanitized_scene_id>.gpkg :
+            one per scene with flood cells, only if export_vector=True.
+        output_base/flood_image/floodmap_..._<sanitized_scene_id>.png :
+            one per scene, only if export_maps=True (no new attribute
+            set for this one -- files only).
         """
         if rel_slope_thd is not None:
             warnings.warn(
@@ -1667,13 +1826,27 @@ class flood_mapper():
         classified rasters from disk (self.flood_dict's paths) one
         date's worth at a time -- typically 1 scene, occasionally a
         handful for same-day multi-track coverage -- never the whole
-        wet season's scenes at once. Sets self.flood_by_date and, if
-        export_raster, writes 'floodextentstacked_<DRY_..._WET_...>_<id>.tif'
-        (band descriptions are the sorted date strings) and populates
-        self.flood_raster_dict -- the input aggregate_monthly()/monthly_sum()
-        reads. This is the file expected_monthly_outfile()/is_fully_processed()
-        check for (via its monthly-aggregated form) to decide whether an
-        AOI needs (re)processing at all.
+        wet season's scenes at once. This is the file
+        expected_monthly_outfile()/is_fully_processed() check for (via
+        its monthly-aggregated form) to decide whether an AOI needs
+        (re)processing at all.
+
+        Sets
+        ----
+        self.flood_by_date : dict
+            {aoi_id: DataArray}, dims=['date', 'y', 'x'], one band per
+            observed date (band/coord values are sorted YYYYMMDD
+            strings). Always set (regardless of export_raster) for
+            every AOI in self.flood_dict that has at least one scene.
+        self.flood_raster_dict : dict, only if export_raster=True
+            {aoi_id: path to that AOI's exported floodextentstacked
+            .tif} -- what monthly_sum() reads from.
+
+        Writes
+        ------
+        output_base/flood_raster/floodextentstacked_<tag>/floodextentstacked
+            <tag>_<id>.tif : one per AOI, only if export_raster=True
+            (band descriptions are the sorted date strings).
         """
         self.flood_by_date = dict()
 
@@ -1744,6 +1917,19 @@ class flood_mapper():
         result as a stack-then-sum would give, just accumulated instead
         of materialized: sum is associative regardless of processing
         order.
+
+        Sets
+        ----
+        self.scene_count : dict
+            {aoi_id: DataArray}, one entry per AOI in
+            self._wet_scene_valid_count_by_aoi that has at least one
+            wet scene. Always set, regardless of export_raster.
+
+        Writes
+        ------
+        output_base/flood_raster/floodvalidscenecount_<tag>/
+            floodvalidscenecount_<tag>_<id>.tif : one per AOI, only if
+            export_raster=True (no new attribute for this -- files only).
         """
         self.scene_count = dict()
 
@@ -1813,6 +1999,19 @@ class flood_mapper():
         output, self.flood_raster_dict) into a per-month flood-day-count
         raster via postprocessing.aggregate_monthly() -- the final output
         expected_monthly_outfile()/is_fully_processed() check for.
+
+        Sets
+        ----
+        Nothing on self -- disk output only (see Writes below). Reads
+        self.flood_raster_dict, set by merge_floods_by_date(export_raster=True).
+
+        Writes
+        ------
+        output_base/flood_raster/monthlyadded/floodextentstacked<tag>_<id>
+            _monthly.tif : one per AOI in self.flood_raster_dict --
+            pixel values are the per-month COUNT of dates a pixel was
+            high-confidence flooded (nodata=255 wherever a pixel had
+            zero valid observations all month, not a false 0).
         """
         for id in tqdm(self.flood_raster_dict, desc='Aggregating monthly sums', disable=None):
             autofloods.postprocessing.aggregate_monthly(self.flood_raster_dict[id])
