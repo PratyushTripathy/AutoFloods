@@ -107,9 +107,20 @@ be compared against.
 fm.get_dry_dates()                    # read each AOI's dry season into self.dry_months
 fm.generate_dry_date_ranges()         # turn dry_months into per-year search date ranges
 fm.get_s1_items(dry_wet='dry')        # STAC-search the source for dry-season scenes
-fm.read_scenes(dry_wet='dry', overview_level=None, max_workers=6)  # download + read those scenes
+fm.read_scenes(dry_wet='dry', overview_level=None)  # download + read those scenes
 fm.generate_mean_std_by_aoi()         # fit the dry-season Z-score baseline per AOI
 ```
+
+`read_scenes()`'s `max_workers`/`reproject_max_workers` (also accepted
+by `prepare_wet_scenes()` and `generate_mean_std_by_aoi()` below)
+default to a conservative 2 each -- peak memory in the bounded read/
+reproject pipeline is bounded by this concurrency window, and a real
+sweep on a 49-scene tile-year measured 14.35GB peak RSS at (6, 7)
+workers versus 8.42GB at (2, 2), roughly 2x wall-clock for that ~39%
+memory reduction. The conservative default matters more than
+throughput for a first run on an unfamiliar machine; raise both (e.g.
+`max_workers=6, reproject_max_workers=6`) once you know how much
+memory is actually available.
 
 **3. Classify wet-season scenes and aggregate.** Prepare the
 terrain-slope mask, then search/read/classify every wet-season scene
@@ -119,7 +130,7 @@ and per-month outputs.
 ```python
 fm.prepare_slope(dem_overview=0, buffer=500)  # compute/cache the terrain-slope mask
 
-fm.prepare_wet_scenes(overview_level=None, max_workers=6)  # search, read, reproject wet-season scenes
+fm.prepare_wet_scenes(overview_level=None)  # search, read, reproject wet-season scenes
 fm.map_floods(vv_thd=-2.5, vh_thd=-2.5, slope_thd=15,
               export_vector=False, export_maps=False)  # classify each scene against the baseline
 fm.merge_floods_by_date(export_raster=True)       # collapse per-scene results into one band per date
@@ -205,7 +216,8 @@ detection:
 
 read:
   overview_level: null       # int for MPC (e.g. 0); ignored by OPERASource
-  max_workers: 6
+  max_workers: 2              # omit for the default (2); raise once you know available RAM
+  reproject_max_workers: 2    # omit for the default (2); see the concurrency note above
 
 slope:
   dem_overview: 0

@@ -84,11 +84,12 @@ def run_one_aoi(cfg, aoi_id):
         return
 
     overview_level = read_cfg.get('overview_level', 3)
-    max_workers = read_cfg.get('max_workers', 6)  # download concurrency (network-bound)
-    # reproject_max_workers: CPU-bound reprojection concurrency. None (the
-    # YAML default when the key is omitted) resolves to
-    # utils.default_max_workers() -- (available CPUs - 1) on whatever
-    # system this runs on, not a value hardcoded for one cluster.
+    # max_workers/reproject_max_workers: None (the default when the YAML
+    # omits either key) resolves to flood_mapper.DEFAULT_MAX_WORKERS (2)
+    # -- a conservative, memory-first default, not one hardcoded here.
+    # See DEFAULT_MAX_WORKERS's module-level comment in autofloods/__init__.py
+    # for the measured memory/throughput tradeoff.
+    max_workers = read_cfg.get('max_workers', None)  # download concurrency (network-bound)
     reproject_max_workers = read_cfg.get('reproject_max_workers', None)
     slope_cfg = cfg.get('slope', {})
 
@@ -103,7 +104,7 @@ def run_one_aoi(cfg, aoi_id):
     fm.prepare_slope(
         dem_overview=slope_cfg.get('dem_overview', 1),
         buffer=slope_cfg.get('buffer', 500),
-        max_workers=slope_cfg.get('max_workers', 6),
+        max_workers=slope_cfg.get('max_workers', None),
     )
     print(f'[{aoi_id}] slope computed', flush=True)
 

@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.1.0a28
+
+**Lowered the default concurrency for `max_workers`/`reproject_max_workers`
+to 2 everywhere they're exposed**, replacing the old CPU-count-derived
+default. Peak memory in the bounded read/reproject pipeline is bounded
+by this concurrency window: a real sweep on a 49-scene tile-year
+measured **14.35 GB** peak RSS at the old defaults (6, 7) versus
+**8.42 GB** at (2, 2) -- roughly 2x wall-clock for that ~39% memory
+reduction. A conservative default matters more than throughput for a
+first run on an unfamiliar machine; raise both once you know how much
+memory is actually available.
+
+Affected: `flood_mapper.read_scenes()`, `prepare_wet_scenes()`,
+`prepare_slope()`, `generate_mean_std_by_aoi()`;
+`preprocessing.reproject_clip_stac()`, `stack_images()`,
+`compute_dry_baseline_stats()`, `compute_dry_baseline_stats_from_paths()`;
+`utils.download_nasadem()`. `utils.default_max_workers()` (the old
+CPU-scaled resolver) is unchanged and still available for anyone who
+wants that behavior explicitly.
+
+A one-time INFO log fires the first time a `flood_mapper` instance
+actually falls back to this default (never when the caller passes
+either value explicitly): "Running with max_workers=2,
+reproject_max_workers=2 for low memory use; on a machine with more RAM
+available, raising these will speed up processing considerably." Fires
+once per instance, not per scene or per tile.
+
+**Also fixed**: `scripts/run_autofloods.py` (the config-driven runner)
+and `scripts/verification/manuscript_stage_profile.py` both had their
+own hardcoded `.get('max_workers', 6)`-style fallback, silently
+overriding the new default before it could ever apply to a config that
+simply omits the key -- the exact path production config-driven runs
+use. Both now fall through to `None`, letting the new default resolve
+and log as intended.
+
+Full test suite: 233 passing (6 new: `TestResolveConcurrency` in
+`test_pipeline_logging.py`, covering default resolution, explicit-value
+passthrough with no log, one-log-per-instance across multiple calls,
+partial-override still resolving+logging, and two end-to-end checks
+through `read_scenes()`).
+
 ## 0.1.0a27
 
 **Documentation correction: Microsoft Planetary Computer subscription

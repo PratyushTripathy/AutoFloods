@@ -6,10 +6,23 @@ import geopandas as gpd
 import xarray as xr
 import numpy as np
 import xrspatial
-from ..utils import decibel_to_linear, default_max_workers, zone_to_epsg
+from ..utils import decibel_to_linear, zone_to_epsg
 import concurrent.futures
 import gc
 import itertools
+
+# Default concurrency for every max_workers parameter in this module
+# when the caller leaves it at None -- mirrors autofloods.DEFAULT_MAX_WORKERS
+# (kept as a separate constant here rather than imported, to avoid a
+# circular import: autofloods/__init__.py imports this module). See
+# that constant's module-level comment for the measured memory/
+# throughput tradeoff (14.35GB vs 8.42GB peak RSS on a 49-scene
+# tile-year, roughly 2x wall-clock, at (6,7) vs (2,2) workers) this
+# default was chosen against. Previously these fell back to
+# utils.default_max_workers() (CPU count - 1) instead -- that function
+# is unchanged and still available for anyone who wants the old
+# CPU-scaled behavior explicitly (pass it as the argument value).
+_DEFAULT_MAX_WORKERS = 2
 
 
 # define a function to read VV and VH tif files from the cloud and store all images in memory
@@ -78,9 +91,9 @@ def reproject_clip_stac(reprojected_dict, aoi_scene_dict, grid_shapefile_path, i
     aoi_scene_dict (dict)       : A dictionary mapping AOI IDs to lists of scene IDs.
     id (str)                    : The AOI ID for which clipping should be performed.
     max_workers (int or None)   : Thread pool size for concurrent per-scene reprojection.
-                                   None (default) uses utils.default_max_workers() --
-                                   (available CPUs - 1) on whatever system this runs on,
-                                   not a number hardcoded for one particular cluster.
+                                   None (default) resolves to _DEFAULT_MAX_WORKERS (2) --
+                                   a conservative, memory-first default; see this module's
+                                   own _DEFAULT_MAX_WORKERS comment for the measured tradeoff.
 
     Returns
     _______
@@ -88,7 +101,7 @@ def reproject_clip_stac(reprojected_dict, aoi_scene_dict, grid_shapefile_path, i
 
     """
     if max_workers is None:
-        max_workers = default_max_workers()
+        max_workers = _DEFAULT_MAX_WORKERS
 
     # read the shapefile and filter it to use for clipping
     gdf = gpd.read_file(grid_shapefile_path)
@@ -129,13 +142,13 @@ def stack_images(clipped_dict, grid_shapefile_path, id, max_workers=None, cell_s
 
     The per-scene alignment runs concurrently via a thread pool for the
     same reason as reproject_clip_stac(). max_workers: None (default)
-    uses utils.default_max_workers() -- (available CPUs - 1) on whatever
-    system this runs on.
+    resolves to _DEFAULT_MAX_WORKERS (2) -- see this module's own
+    _DEFAULT_MAX_WORKERS comment for the measured tradeoff.
 
     Returns {'vv_stack': DataArray, 'vh_stack': DataArray}.
     """
     if max_workers is None:
-        max_workers = default_max_workers()
+        max_workers = _DEFAULT_MAX_WORKERS
 
     # create a list of dictionaries containing 'vv_ds' and 'vh_ds'
     stacked_images = [
@@ -264,7 +277,7 @@ def compute_dry_baseline_stats(clipped_dict, grid_shapefile_path, id, max_worker
             Its pixel values are never read as statistics.
     """
     if max_workers is None:
-        max_workers = default_max_workers()
+        max_workers = _DEFAULT_MAX_WORKERS
 
     items = list(clipped_dict.values())
     ref = items[0]['vv_ds']
@@ -394,7 +407,9 @@ def compute_dry_baseline_stats_from_paths(path_dict, max_workers=None):
         {scene_id: path to that scene's cached .nc}.
     max_workers : int or None
         Thread pool size for concurrent per-scene cache loads. None
-        (default) uses utils.default_max_workers().
+        (default) resolves to _DEFAULT_MAX_WORKERS (2) -- see this
+        module's own _DEFAULT_MAX_WORKERS comment for the measured
+        tradeoff.
 
     Returns
     -------
@@ -402,7 +417,7 @@ def compute_dry_baseline_stats_from_paths(path_dict, max_workers=None):
     (each {'mean':.., 'std':..}), and 'grid_ref'.
     """
     if max_workers is None:
-        max_workers = default_max_workers()
+        max_workers = _DEFAULT_MAX_WORKERS
 
     paths = list(path_dict.values())
 

@@ -124,7 +124,10 @@ def main():
     print(f'[{aoi_id}] output_dir: {fm.output_dir}', flush=True)
 
     overview_level = read_cfg.get('overview_level', 3)
-    max_workers = read_cfg.get('max_workers', 6)
+    # None (the default when the YAML omits either key) resolves to
+    # flood_mapper.DEFAULT_MAX_WORKERS (2), not a value hardcoded here
+    # -- matches scripts/run_autofloods.py's own resolution.
+    max_workers = read_cfg.get('max_workers', None)
     reproject_max_workers = read_cfg.get('reproject_max_workers', None)
 
     profiler.run('get_dry_dates', fm.get_dry_dates)
@@ -138,7 +141,7 @@ def main():
     profiler.run('prepare_slope', lambda: fm.prepare_slope(
         dem_overview=slope_cfg.get('dem_overview', 1),
         buffer=slope_cfg.get('buffer', 500),
-        max_workers=slope_cfg.get('max_workers', 6),
+        max_workers=slope_cfg.get('max_workers', None),
     ))
     profiler.run('prepare_wet_scenes', lambda: fm.prepare_wet_scenes(
         overview_level=overview_level, max_workers=max_workers,

@@ -291,3 +291,89 @@ class TestMonthlySum:
             fm.monthly_sum()
 
         assert 'Monthly aggregation complete for 1 AOI(s)' in caplog.text
+
+
+class TestResolveConcurrency:
+    """
+    flood_mapper._resolve_concurrency() -- the shared helper behind
+    read_scenes()/prepare_wet_scenes()/generate_mean_std_by_aoi()/
+    prepare_slope()'s max_workers/reproject_max_workers defaults.
+    DEFAULT_MAX_WORKERS was lowered from a CPU-count-derived value to a
+    fixed 2 (see autofloods.DEFAULT_MAX_WORKERS's module-level comment
+    for the measured memory/throughput tradeoff this was chosen
+    against); these confirm the resolution and one-time-notice logic
+    around that default, not the default's numeric value itself.
+    """
+
+    def test_resolves_none_to_default_and_logs_once(self, tmp_path, caplog):
+        fm = _make_flood_mapper(tmp_path)
+        with caplog.at_level(logging.INFO, logger='autofloods'):
+            resolved = fm._resolve_concurrency(max_workers=None, reproject_max_workers=None)
+
+        assert resolved == {'max_workers': autofloods.DEFAULT_MAX_WORKERS,
+                             'reproject_max_workers': autofloods.DEFAULT_MAX_WORKERS}
+        assert (f'Running with max_workers={autofloods.DEFAULT_MAX_WORKERS}, '
+                f'reproject_max_workers={autofloods.DEFAULT_MAX_WORKERS}') in caplog.text
+
+    def test_explicit_values_pass_through_without_logging(self, tmp_path, caplog):
+        fm = _make_flood_mapper(tmp_path)
+        with caplog.at_level(logging.INFO, logger='autofloods'):
+            resolved = fm._resolve_concurrency(max_workers=8, reproject_max_workers=5)
+
+        assert resolved == {'max_workers': 8, 'reproject_max_workers': 5}
+        assert caplog.text == ''
+
+    def test_logs_only_once_per_instance_across_multiple_calls(self, tmp_path, caplog):
+        fm = _make_flood_mapper(tmp_path)
+        with caplog.at_level(logging.INFO, logger='autofloods'):
+            fm._resolve_concurrency(max_workers=None, reproject_max_workers=None)
+            fm._resolve_concurrency(max_workers=None, reproject_max_workers=None)
+
+        assert caplog.text.count('Running with max_workers=') == 1
+
+    def test_partial_override_still_resolves_missing_value_and_logs(self, tmp_path, caplog):
+        """Even if the caller sets one of the two explicitly, leaving
+        the other at None still counts as "the default is in use" and
+        still fires the notice -- it isn't only for the both-unset case."""
+        fm = _make_flood_mapper(tmp_path)
+        with caplog.at_level(logging.INFO, logger='autofloods'):
+            resolved = fm._resolve_concurrency(max_workers=8, reproject_max_workers=None)
+
+        assert resolved == {'max_workers': 8, 'reproject_max_workers': autofloods.DEFAULT_MAX_WORKERS}
+        assert 'Running with max_workers=' in caplog.text
+
+    def test_read_scenes_uses_default_and_logs_when_unset(self, tmp_path, monkeypatch, caplog):
+        """End-to-end through the real public entry point, not just the
+        helper directly."""
+        fm = _make_flood_mapper(tmp_path)
+        fm.dry_s1_scenes = [SimpleNamespace(id='s1')]
+        fm.dry_aoi_scene_dict = {TILE_ID: ['s1']}
+
+        monkeypatch.setattr(
+            autofloods.preprocessing, 'read_sentinel1_stac',
+            lambda item, source, overview_level, bbox=None: (
+                item.id, {'vv_ds': _native_covering_array(), 'vh_ds': _native_covering_array()},
+            ),
+        )
+
+        with caplog.at_level(logging.INFO, logger='autofloods'):
+            fm.read_scenes(dry_wet='dry')
+
+        assert f'Running with max_workers={autofloods.DEFAULT_MAX_WORKERS}' in caplog.text
+
+    def test_read_scenes_explicit_values_suppress_notice(self, tmp_path, monkeypatch, caplog):
+        fm = _make_flood_mapper(tmp_path)
+        fm.dry_s1_scenes = [SimpleNamespace(id='s1')]
+        fm.dry_aoi_scene_dict = {TILE_ID: ['s1']}
+
+        monkeypatch.setattr(
+            autofloods.preprocessing, 'read_sentinel1_stac',
+            lambda item, source, overview_level, bbox=None: (
+                item.id, {'vv_ds': _native_covering_array(), 'vh_ds': _native_covering_array()},
+            ),
+        )
+
+        with caplog.at_level(logging.INFO, logger='autofloods'):
+            fm.read_scenes(dry_wet='dry', max_workers=4, reproject_max_workers=3)
+
+        assert 'Running with max_workers=' not in caplog.text

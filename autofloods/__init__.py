@@ -50,6 +50,23 @@ logger.propagate = False
 #DEM_OUTFILE = r'nasadem_aoi_id.nc'
 SLOPE_OUTFILE = r'slope_aoi_id.nc'
 
+# Default concurrency for every max_workers/reproject_max_workers
+# parameter across this class (read_scenes, prepare_wet_scenes,
+# generate_mean_std_by_aoi, prepare_slope) when the caller leaves them
+# at None. Chosen for low memory use on an unknown machine, not
+# throughput: a real sweep on a 49-scene tile-year measured 14.35 GB
+# peak RSS at the old CPU-count-derived defaults (6, 7) versus 8.42 GB
+# at (2, 2) -- roughly 2x wall-clock for that ~39% memory reduction.
+# Peak memory in the bounded read/reproject pipeline is bounded by this
+# concurrency window (see read_scenes()'s docstring), so this is the
+# single knob that trades memory for speed. Previously these fell back
+# to utils.default_max_workers() (CPU count - 1), which could default
+# to a much wider window on a many-core shared node than a first run on
+# an unfamiliar machine should risk -- that function is unchanged and
+# still available for anyone who wants the old CPU-scaled behavior
+# explicitly (pass it as the argument value).
+DEFAULT_MAX_WORKERS = 2
+
 # NOTE: the path templates below (JSON, mean/std, flood raster/vector/image
 # outputs, and the folder list) are no longer module-level constants -- they
 # are computed per-instance in flood_mapper.generate_defaults() from
@@ -223,6 +240,12 @@ class flood_mapper():
         self.id_key = id_col
         self.dry_date_col = dry_date_col
         self.keep_intermediate_in_memory = keep_intermediate_in_memory
+        # Set the first time _resolve_concurrency() falls back to the
+        # default max_workers/reproject_max_workers for this instance,
+        # so the "running with conservative defaults" notice logs once
+        # per run (one flood_mapper instance, per this codebase's own
+        # one-AOI-per-job convention) rather than once per call.
+        self._default_concurrency_logged = False
         self.source = source if source is not None else sources.MPCSource()
         self.detector = detector if detector is not None else detectors.ZScoreDetector(vv_thd=-2.5, vh_thd=-2.5)
         self.cell_size = cell_size
@@ -617,6 +640,39 @@ class flood_mapper():
             self.wet_aoi_scene_dict, self.wet_scene_aoi_dict = aoi_scene_dict, scene_aoi_dict
             self.wet_skipped_ids = skipped_ids
 
+    def _resolve_concurrency(self, **kwargs):
+        """
+        Resolve any of max_workers/reproject_max_workers left at their
+        None default to DEFAULT_MAX_WORKERS, logging a one-time INFO
+        notice the first time this instance falls back to the default
+        for any of them. Values the caller passed explicitly (non-None)
+        are returned unchanged and never trigger the notice or count
+        toward it -- pass exactly the kwargs relevant to the calling
+        method (e.g. only reproject_max_workers=... for
+        generate_mean_std_by_aoi(), which has no max_workers of its
+        own).
+
+        Returns a dict with the same keys, each resolved to a concrete
+        int.
+        """
+        resolved = {}
+        used_default = False
+        for name, value in kwargs.items():
+            if value is None:
+                resolved[name] = DEFAULT_MAX_WORKERS
+                used_default = True
+            else:
+                resolved[name] = value
+        if used_default and not self._default_concurrency_logged:
+            logger.info(
+                f'Running with max_workers={DEFAULT_MAX_WORKERS}, '
+                f'reproject_max_workers={DEFAULT_MAX_WORKERS} for low memory use; '
+                'on a machine with more RAM available, raising these will speed up '
+                'processing considerably.'
+            )
+            self._default_concurrency_logged = True
+        return resolved
+
     def _aoi_union_bounds_4326(self):
         """
         (minx, miny, maxx, maxy) in EPSG:4326 covering every AOI this
@@ -633,17 +689,19 @@ class flood_mapper():
         ys = [c[1] for c in coords]
         return (min(xs), min(ys), max(xs), max(ys))
 
-    def read_scenes(self, dry_wet='dry', overview_level=3, max_workers=6, reproject_max_workers=None):
+    def read_scenes(self, dry_wet='dry', overview_level=3, max_workers=None, reproject_max_workers=None):
         """
         Download+read every scene found by get_s1_items() (self.dry_s1_scenes
         or self.wet_s1_scenes) via `self.source`, concurrently.
         `overview_level` is source-dependent -- MPCSource's COGs have an
         internal pyramid (lower = higher resolution); OPERASource ignores
-        it (no pyramid, always native 30m). `max_workers` default (6) is
-        a safe concurrency level against OPERASource -- see
-        autofloods.sources's module docstring for source-specific guidance.
-        `reproject_max_workers` (new) bounds concurrent per-scene
-        reprojection; None (default) uses utils.default_max_workers().
+        it (no pyramid, always native 30m). `max_workers` bounds read
+        concurrency; `reproject_max_workers` bounds concurrent per-scene
+        reprojection. Both default to None, resolved to
+        DEFAULT_MAX_WORKERS (2) if left unset -- see that constant's
+        module-level comment for the memory/throughput tradeoff this
+        default was measured against. A one-time INFO log notes when
+        this default is actually in use (see _resolve_concurrency()).
 
         keep_intermediate_in_memory=False (default): bounded two-stage
         pipeline -- reads are bounded by max_workers, and as each scene's
@@ -682,6 +740,9 @@ class flood_mapper():
         it to fetch only the intersecting portion of its COG assets over
         the network instead of the full scene; OPERASource ignores it.
         """
+        resolved = self._resolve_concurrency(max_workers=max_workers, reproject_max_workers=reproject_max_workers)
+        max_workers, reproject_max_workers = resolved['max_workers'], resolved['reproject_max_workers']
+
         if dry_wet == 'dry':
             s1_scenes = self.dry_s1_scenes
             aoi_scene_dict = self.dry_aoi_scene_dict
@@ -737,11 +798,10 @@ class flood_mapper():
         Shared bounded two-stage read+reproject+cache pipeline behind
         read_scenes()'s default (keep_intermediate_in_memory=False) path
         -- see that method's docstring for the full contract. Used
-        identically by both dry and wet.
+        identically by both dry and wet. max_workers/reproject_max_workers
+        are already resolved to concrete ints by read_scenes() before
+        this is called.
         """
-        if reproject_max_workers is None:
-            reproject_max_workers = autofloods.utils.default_max_workers()
-
         cache_dir = self.dry_scenes_cache_dir if dry_wet == 'dry' else self.wet_scenes_cache_dir
         cache_prefix = 'dryscene' if dry_wet == 'dry' else 'wetscene'
 
@@ -961,7 +1021,8 @@ class flood_mapper():
         preprocessing.reproject_clip_stac()/compute_dry_baseline_stats()'s
         thread pools (CPU-bound reprojection concurrency) when
         keep_intermediate_in_memory=True (self.s1_dry_dict present) --
-        None (default) uses utils.default_max_workers(). When False
+        defaults to None, resolved to DEFAULT_MAX_WORKERS (2) if left
+        unset (see that constant's module-level comment). When False
         (default), read_scenes() has already read+reprojected+cached
         every dry scene per AOI (self.dry_scene_paths); this method just
         streams from that cache one scene at a time
@@ -970,6 +1031,8 @@ class flood_mapper():
         concurrent cache-file loads rather than reprojections, since
         reprojection already happened at cache-write time).
         """
+        reproject_max_workers = self._resolve_concurrency(
+            reproject_max_workers=reproject_max_workers)['reproject_max_workers']
         ids_to_fit = [id for id in self.selected_grid_id if not id in self.already_processed_aoi_ids]
 
         if hasattr(self, 's1_dry_dict'):
@@ -1079,7 +1142,7 @@ class flood_mapper():
                 except:
                     print(f'{infile} present in JSON as processed but .nc file is missing.')
 
-    def prepare_slope(self, dem_overview=1, nodata=0.0, buffer=500, max_workers=6):
+    def prepare_slope(self, dem_overview=1, nodata=0.0, buffer=500, max_workers=None):
         """
         Compute (or reload from `slope_dir` if already cached) a raw
         (unsmoothed) relative-slope raster per AOI, used by the
@@ -1103,8 +1166,10 @@ class flood_mapper():
         preprocessing.compute_slope(). `max_workers` is DEM download
         concurrency (network-bound, passed to utils.download_nasadem)
         -- separate from the CPU-bound reprojection thread pools
-        elsewhere in this class.
+        elsewhere in this class. Defaults to None, resolved to
+        DEFAULT_MAX_WORKERS (2) if left unset.
         """
+        max_workers = self._resolve_concurrency(max_workers=max_workers)['max_workers']
         slope_id_to_process = [
             id
             for id in self.selected_grid_id
@@ -1177,7 +1242,7 @@ class flood_mapper():
             del self.slope
             gc.collect()
 
-    def prepare_wet_scenes(self, overview_level=3, max_workers=6, reproject_max_workers=None):
+    def prepare_wet_scenes(self, overview_level=3, max_workers=None, reproject_max_workers=None):
         """
         Search, read, reproject, and clip every wet-season scene for each
         AOI onto that AOI's baseline grid -- must run after
@@ -1213,12 +1278,13 @@ class flood_mapper():
         max_workers controls read_scenes()'s download concurrency
         (network-bound); reproject_max_workers bounds per-scene
         reprojection concurrency -- same GIL-releasing-GDAL-warp pattern
-        as preprocessing.reproject_clip_stac(). None (default) uses
-        utils.default_max_workers() -- (available CPUs - 1) on whatever
-        system this runs on.
+        as preprocessing.reproject_clip_stac(). Both default to None,
+        resolved to DEFAULT_MAX_WORKERS (2) if left unset -- see that
+        constant's module-level comment for the memory/throughput
+        tradeoff this default was measured against.
         """
-        if reproject_max_workers is None:
-            reproject_max_workers = autofloods.utils.default_max_workers()
+        resolved = self._resolve_concurrency(max_workers=max_workers, reproject_max_workers=reproject_max_workers)
+        max_workers, reproject_max_workers = resolved['max_workers'], resolved['reproject_max_workers']
         # call the previouisly defined method to get S1 scenes for the wet period
         self.get_s1_items(dry_wet='wet')
         self.read_scenes(dry_wet='wet', overview_level=overview_level, max_workers=max_workers,

@@ -461,7 +461,7 @@ def _windowed_bbox_for_dem_item(item, bbox_4326):
     )
 
 
-def download_nasadem(bbox, source, overview_level=1, nodata=0.0, max_workers=6):
+def download_nasadem(bbox, source, overview_level=1, nodata=0.0, max_workers=2):
     """
     Search + read every DEM tile covering `bbox` and mosaic them into one
     DataArray (rioxarray_merge.merge_arrays -- last-tile-wins on overlap).
