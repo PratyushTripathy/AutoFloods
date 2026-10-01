@@ -10,7 +10,7 @@ measured, e.g. stage 4).
 
 Stages:
   0. Download + cache tile 321's dry-season scenes (native CRS, post
-     decibel_to_linear, pre-reproject) -- once.
+     linear_to_decibel, pre-reproject) -- once.
   1. Reprojection: current double-reproject (native -> EPSG:4326 -> tile
      UTM) vs a direct single-reproject (native -> tile UTM), on the same
      cached scenes. Includes a correctness check (max abs pixel diff).
@@ -46,7 +46,7 @@ import rasterio
 import xarray as xr
 
 from autofloods.sources import OPERASource
-from autofloods.utils import decibel_to_linear, export_xarray
+from autofloods.utils import linear_to_decibel, export_xarray
 
 AOI_ID = 321
 GRID = f'{BASE}/resources/india_utm_fishnet_buffer.gpkg'
@@ -113,8 +113,8 @@ if __name__ == '__main__':
     for p in passes:
         vv_ds, vh_ds = source.read_vv_vh(p)
         native_scenes[p.id] = {
-            'vv_ds': decibel_to_linear(vv_ds),
-            'vh_ds': decibel_to_linear(vh_ds),
+            'vv_ds': linear_to_decibel(vv_ds.where(vv_ds > 0)),
+            'vh_ds': linear_to_decibel(vh_ds.where(vh_ds > 0)),
         }
     download_time = time.time() - t0
     log_stage('stage0_download_and_cache', download_time, {'n_scenes': len(native_scenes)})

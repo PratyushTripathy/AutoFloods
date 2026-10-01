@@ -21,15 +21,14 @@ No function here calls plt.show() -- each returns a matplotlib Figure,
 which renders normally in a notebook (as the last expression in a cell)
 or via plt.show()/fig.savefig() in a script.
 
-Units: Sentinel-1 VV/VH are converted from decibel to linear power
-immediately on read (see preprocessing.read_sentinel1_stac ->
-utils.decibel_to_linear) and stay in linear power in every on-disk
-cache these functions read (mean_std, wet_scenes_cache). Display
-functions convert back to dB via utils.linear_to_decibel() -- its
-docstring already says "use for display" -- since dB gives SAR
-backscatter's standard, visually sane dynamic range; linear power is
-heavily right-skewed and looks like a near-black image with occasional
-bright specks.
+Units: Sentinel-1 VV/VH gamma0 is converted from linear power to
+decibels immediately on read (see preprocessing.read_sentinel1_stac ->
+utils.linear_to_decibel) and every on-disk cache these functions read
+(mean_std, wet_scenes_cache) therefore holds dB values, which are used
+directly here with no further conversion. dB gives SAR backscatter's
+standard, visually sane dynamic range; linear power is heavily
+right-skewed and looks like a near-black image with occasional bright
+specks.
 """
 
 import glob
@@ -46,7 +45,7 @@ from rasterio.enums import Resampling
 from skimage.transform import downscale_local_mean
 
 from . import SLOPE_OUTFILE
-from .utils import _extract_date_token, linear_to_decibel, sanitize_scene_id_for_filename
+from .utils import _extract_date_token, sanitize_scene_id_for_filename
 
 # switch off displaying maps (matches autofloods.mapfloods's convention)
 plt.ioff()
@@ -118,17 +117,17 @@ def _new_figure_with_legend_row(n_image_rows, n_cols, panel_size=2.2, legend_row
 def plot_baseline(fm, aoi_id):
     """
     2x2 grid of the dry-season Z-score baseline (fm.nc_outfile's
-    per-AOI NetCDF): VV mean, VV std, VH mean, VH std. Mean panels
-    (converted to dB for display) share one percentile-clipped color
-    scale; std panels (native linear units -- dB of a std isn't a
-    physically meaningful transform) share a separate one, since mean
-    and std are on very different numeric scales.
+    per-AOI NetCDF): VV mean, VV std, VH mean, VH std. The baseline is
+    stored in dB, so all four panels are shown as stored. Mean panels
+    share one percentile-clipped color scale; std panels (the std of
+    the dB values) share a separate one, since mean and std are on very
+    different numeric scales.
     """
     infile = fm.nc_outfile.replace('_id_', f'_{aoi_id}_')
     baseline = xr.load_dataarray(infile)
 
-    vv_mean_db = linear_to_decibel(baseline.sel(band='vv_mean').values)
-    vh_mean_db = linear_to_decibel(baseline.sel(band='vh_mean').values)
+    vv_mean_db = baseline.sel(band='vv_mean').values
+    vh_mean_db = baseline.sel(band='vh_mean').values
     vv_std = baseline.sel(band='vv_std').values
     vh_std = baseline.sel(band='vh_std').values
 
@@ -139,8 +138,8 @@ def plot_baseline(fm, aoi_id):
     panels = [
         (axes[0, 0], vv_mean_db, 'VV mean (dB)', mean_vmin, mean_vmax),
         (axes[0, 1], vh_mean_db, 'VH mean (dB)', mean_vmin, mean_vmax),
-        (axes[1, 0], vv_std, 'VV std (linear)', std_vmin, std_vmax),
-        (axes[1, 1], vh_std, 'VH std (linear)', std_vmin, std_vmax),
+        (axes[1, 0], vv_std, 'VV std (dB)', std_vmin, std_vmax),
+        (axes[1, 1], vh_std, 'VH std (dB)', std_vmin, std_vmax),
     ]
     for ax, data, title, vmin, vmax in panels:
         im = ax.imshow(data, cmap='viridis', vmin=vmin, vmax=vmax)
@@ -242,15 +241,14 @@ def _discover_wet_scenes(fm, aoi_id):
 
 def _rgb_composite(scene_path, thumbnail_max_size=400):
     """R=VV, G=VH, B=(VV/VH log-ratio), each in dB and independently
-    percentile-clipped for display. B is computed as a dB DIFFERENCE
-    (linear_to_decibel(vv) - linear_to_decibel(vh)) rather than
-    linear_to_decibel(vv / vh) -- mathematically identical
-    (10*log10(vv/vh) == 10*log10(vv) - 10*log10(vh)) but avoids a
-    linear-space division that can blow up near-zero VH pixels.
+    percentile-clipped for display. The cached scene already holds VV
+    and VH in dB, so they are used as stored and B is the dB DIFFERENCE
+    vv_db - vh_db, which equals 10*log10(vv/vh) of the underlying
+    linear power.
 
     Downsamples (block-mean, via skimage.transform.downscale_local_mean)
     to roughly `thumbnail_max_size` on the longer side BEFORE computing
-    dB/percentile-stretch -- the full tile-resolution array is only ever
+    the percentile-stretch -- the full tile-resolution array is only ever
     transient here (freed once this function returns), but the
     RETURNED composite is what gets handed to imshow() and retained by
     the Figure for its whole lifetime, so downsampling here (not after)
@@ -265,8 +263,8 @@ def _rgb_composite(scene_path, thumbnail_max_size=400):
         vv = downscale_local_mean(vv, (factor, factor))
         vh = downscale_local_mean(vh, (factor, factor))
 
-    vv_db = linear_to_decibel(vv)
-    vh_db = linear_to_decibel(vh)
+    vv_db = vv
+    vh_db = vh
     ratio_db = vv_db - vh_db
 
     channels = []
