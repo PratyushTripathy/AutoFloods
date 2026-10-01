@@ -6,7 +6,7 @@ import geopandas as gpd
 import xarray as xr
 import numpy as np
 import xrspatial
-from ..utils import decibel_to_linear, zone_to_epsg
+from ..utils import linear_to_decibel, zone_to_epsg
 import concurrent.futures
 import gc
 import itertools
@@ -28,8 +28,8 @@ _DEFAULT_MAX_WORKERS = 2
 # define a function to read VV and VH tif files from the cloud and store all images in memory
 def read_sentinel1_stac(stac_item, source, overview_level=3, bbox=None):
     """
-    Read a STAC item's VV/VH bands and convert them from decibel to linear
-    scale (see utils.decibel_to_linear). Does NOT reproject -- every
+    Read a STAC item's VV/VH bands and convert them from linear power to
+    decibels (see utils.linear_to_decibel). Does NOT reproject -- every
     consumer of this function's output (reproject_clip_stac for
     dry-season scenes, clip_xarray_using_id for wet-season scenes)
     reprojects directly to the target tile's UTM zone itself.
@@ -62,9 +62,11 @@ def read_sentinel1_stac(stac_item, source, overview_level=3, bbox=None):
     # source's implementation (see autofloods.utils.open_rasterio_with_retry).
     vv_ds, vh_ds = source.read_vv_vh(stac_item, overview_level=overview_level, bbox=bbox)
 
-    # convert decibel to linear
-    vv_ds = decibel_to_linear(vv_ds)
-    vh_ds = decibel_to_linear(vh_ds)
+    # convert linear power to decibels; values <= 0 (and existing NaN)
+    # are masked to NaN before the logarithm so no -inf/NaN-from-log
+    # reaches downstream code
+    vv_ds = linear_to_decibel(vv_ds.where(vv_ds > 0))
+    vh_ds = linear_to_decibel(vh_ds.where(vh_ds > 0))
 
     return stac_item.id, {
         'vv_ds': vv_ds,
@@ -192,7 +194,7 @@ def stack_images(clipped_dict, grid_shapefile_path, id, max_workers=None, cell_s
 # masked to NaN before folding into the running baseline stats -- same
 # threshold generate_mean_std_by_aoi() used to apply post-hoc, over the
 # full in-memory stack, before this function existed.
-_NODATA_SENTINEL_THRESHOLD = 50
+_NODATA_SENTINEL_THRESHOLD = 17  # dB
 
 
 def _welford_init(x):

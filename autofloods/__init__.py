@@ -952,7 +952,7 @@ class flood_mapper():
                             aoi_id=aoi_id, ref_xarray=vh_source, cell_size=self.cell_size,
                         ),
                     ], dim='band').assign_coords(band=['vv_ds', 'vh_ds'])
-                scene = scene.where(scene < 50, np.nan)
+                scene = scene.where(scene < 17, np.nan)  # dB
                 scene.to_netcdf(cache_path)
             valid_mask = ~np.any(np.isnan(scene.values), axis=0)
             return aoi_id, scene_id, cache_path, valid_mask
@@ -1460,7 +1460,7 @@ class flood_mapper():
                                 cell_size=self.cell_size,
                             )
                         ], dim='band').assign_coords(band=['vv_ds', 'vh_ds'])
-                    scene = scene.where(scene < 50, np.nan)
+                    scene = scene.where(scene < 17, np.nan)  # dB
                     scene.to_netcdf(cache_path)
 
                 valid_mask = ~np.any(np.isnan(scene.values), axis=0)
