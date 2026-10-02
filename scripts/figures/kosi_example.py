@@ -308,7 +308,7 @@ count_handles = [
     Patch(facecolor=_COUNT_BIN_COLORS[i], label=_COUNT_BIN_LABELS[i], edgecolor='#999999', linewidth=0.5)
     for i in range(4)
 ]
-leg_c_ax.legend(handles=count_handles, loc='upper center', ncol=2, frameon=False, fontsize=8,
+leg_c_ax.legend(handles=count_handles, loc='upper center', ncol=4, frameon=False, fontsize=8,
                  handlelength=1.2, handleheight=1.2, columnspacing=1.0, bbox_to_anchor=(0.5, 1.0),
                  title='Flood-day count', title_fontsize=8)
 
