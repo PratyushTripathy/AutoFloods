@@ -4,10 +4,11 @@ title: "AutoFloods"
 
 ## Overview
 
-AutoFloods maps flooded areas from Sentinel-1 SAR (radar) satellite
-imagery, for a region and time period you specify -- producing
-per-date and per-month flood-extent rasters, without requiring a
-background in radar remote sensing to use.
+AutoFloods lets you map flooded areas from Sentinel-1 SAR (radar)
+imagery over any region and time period you choose. Give it an area of
+interest and a date range, and it returns a flood extent for every
+scene it finds, plus a monthly count of how often each pixel was
+flooded.
 
 Under the hood, it detects flooded pixels with per-pixel Z-score
 anomaly detection: a dry-season VV/VH backscatter baseline (mean +
