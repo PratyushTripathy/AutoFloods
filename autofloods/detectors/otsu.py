@@ -109,18 +109,13 @@ class OtsuDetector(FloodDetector):
         to all-False (logged) for any of the degenerate cases in this
         class's docstring, instead of raising.
 
-        Backscatter is converted to dB before thresholding, since OPERA
-        RTC-S1 gamma0 is delivered in linear power, which compresses the
-        water/land populations together and defeats the bimodality guard
-        below. Values <= 0 are masked to NaN rather than passed to log10.
+        The input is already in dB (preprocessing.read_sentinel1_stac
+        converts the linear-power gamma0 it reads to dB), so no
+        conversion is applied here; thresholding on linear power
+        compresses the water/land populations together and defeats the
+        bimodality guard below.
         """
-        with np.errstate(divide='ignore', invalid='ignore'):
-            # OPERA RTC-S1 gamma0 confirmed linear power (tile 318:
-            # values cluster near 1.0, long right tail, never negative).
-            # An unguarded linear-scale threshold on that tile flagged
-            # 99.95% of one band as "flooded"; converting to dB restores
-            # the separation the bimodality guard needs.
-            values = np.where(band.values > 0, 10 * np.log10(band.values), np.nan)
+        values = band.values.astype('float64')
         valid = ~np.isnan(values)
         n_valid = int(valid.sum())
 

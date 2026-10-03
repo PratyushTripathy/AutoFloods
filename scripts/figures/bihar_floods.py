@@ -43,6 +43,7 @@ YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
 TARGET_RESOLUTION_M = 300  # display resolution; coarsened via mean, not decimation
 PAD_KM = 8  # physical (not degree) padding between the Bihar outline and each panel's frame
 VMAX = 5  # fixed colour-scale ceiling (not data-driven), per manuscript style decision
+VMIN = 0.25  # colour floor: cells whose areal mean is below this many flooded dates render white
 DISPLAY_CRS = 'EPSG:4326'  # WGS84 -- display only; area stats (Figure 4) use Mollweide
 NAN_SENTINEL = -9999.0  # float nodata; averaging produces fractional values, not counts
 
@@ -60,53 +61,41 @@ def load_year_total(year, bihar_geom_native):
         nodata = src.nodata
         src_crs = src.crs
 
-    # Coarsen to TARGET_RESOLUTION_M via MEAN (not nearest-neighbour
-    # decimation, which silently drops 15 of every 16 source pixels --
-    # `average` resampling genuinely averages every valid pixel in each
-    # output cell, and GDAL excludes nodata pixels from that average
-    # rather than corrupting it, since src_nodata is set below).
+    # Sum the wet-season bands per NATIVE pixel first (float32, nodata
+    # excluded band by band; a pixel is valid where any band is valid), so
+    # the single resample below averages the summed counts.
     clip_h, clip_w = clipped.shape[1], clipped.shape[2]
-    clip_bounds = rasterio.transform.array_bounds(clip_h, clip_w, clipped_transform)
-    clip_width_m = clip_bounds[2] - clip_bounds[0]
-    clip_height_m = clip_bounds[3] - clip_bounds[1]
-    out_w = max(1, round(clip_width_m / TARGET_RESOLUTION_M))
-    out_h = max(1, round(clip_height_m / TARGET_RESOLUTION_M))
+    band_valid = clipped != nodata
+    valid = band_valid.any(axis=0)
+    summed = (clipped.astype(np.float32) * band_valid).sum(axis=0)
+    summed = np.where(valid, summed, NAN_SENTINEL).astype(np.float32)
 
-    down = np.full((clipped.shape[0], out_h, out_w), NAN_SENTINEL, dtype=np.float32)
-    for b in range(clipped.shape[0]):
-        with rasterio.io.MemoryFile() as memfile:
-            profile = {
-                'driver': 'GTiff', 'dtype': clipped.dtype, 'count': 1, 'nodata': nodata,
-                'height': clip_h, 'width': clip_w,
-                'transform': clipped_transform, 'crs': src_crs,
-            }
-            with memfile.open(**profile) as tmp:
-                tmp.write(clipped[b], 1)
-                masked = tmp.read(1, out_shape=(out_h, out_w), masked=True,
-                                   resampling=rasterio.enums.Resampling.average)
-                down[b] = masked.astype(np.float32).filled(NAN_SENTINEL)
-    down_transform = clipped_transform * clipped_transform.scale(clip_w / out_w, clip_h / out_h)
+    # Final WGS84 display grid, targeted directly: the grid spacing (square
+    # in degrees) is chosen so the meridional cell is as close to
+    # TARGET_RESOLUTION_M as a whole number of rows allows across the
+    # clipped extent. A square cell in degrees is not square in metres at
+    # Bihar's latitude, so the zonal cell comes out ~10% smaller.
+    wgs_bounds = rasterio.warp.transform_bounds(src_crs, DISPLAY_CRS,
+                                                *rasterio.transform.array_bounds(clip_h, clip_w, clipped_transform))
+    height_deg = wgs_bounds[3] - wgs_bounds[1]
+    width_deg = wgs_bounds[2] - wgs_bounds[0]
+    dst_h = max(1, round(height_deg / (TARGET_RESOLUTION_M / 111320.0)))
+    cell_deg = height_deg / dst_h
+    dst_w = max(1, round(width_deg / cell_deg))
+    dst_transform = rasterio.transform.from_origin(wgs_bounds[0], wgs_bounds[3], cell_deg, cell_deg)
 
-    # Reproject to WGS84 for display (mean resampling again, for the same
-    # reason -- the data is already continuous after averaging above, so
-    # this just avoids re-introducing nearest-neighbour dropout).
-    dst_transform, dst_w, dst_h = rasterio.warp.calculate_default_transform(
-        src_crs, DISPLAY_CRS, out_w, out_h, *rasterio.transform.array_bounds(out_h, out_w, down_transform))
-    data = np.full((down.shape[0], dst_h, dst_w), NAN_SENTINEL, dtype=np.float32)
-    for b in range(down.shape[0]):
-        rasterio.warp.reproject(
-            source=down[b], destination=data[b],
-            src_transform=down_transform, src_crs=src_crs, src_nodata=NAN_SENTINEL,
-            dst_transform=dst_transform, dst_crs=DISPLAY_CRS, dst_nodata=NAN_SENTINEL,
-            resampling=rasterio.warp.Resampling.average)
+    # ONE Resampling.average warp from the native Mollweide sum straight
+    # onto the display grid: every valid native pixel contributes to the
+    # areal mean of its display cell (GDAL excludes nodata from the mean),
+    # with no intermediate integer raster and no second reprojection.
+    total = np.full((dst_h, dst_w), NAN_SENTINEL, dtype=np.float32)
+    rasterio.warp.reproject(
+        source=summed, destination=total,
+        src_transform=clipped_transform, src_crs=src_crs, src_nodata=NAN_SENTINEL,
+        dst_transform=dst_transform, dst_crs=DISPLAY_CRS, dst_nodata=NAN_SENTINEL,
+        resampling=rasterio.warp.Resampling.average)
     bounds = rasterio.transform.array_bounds(dst_h, dst_w, dst_transform)
-
-    valid = data[0] != NAN_SENTINEL
-    total = np.zeros(data.shape[1:], dtype=np.float32)
-    for b in range(data.shape[0]):
-        band_valid = data[b] != NAN_SENTINEL
-        total[band_valid] += data[b][band_valid]
-    total[~valid] = np.nan
+    total[total == NAN_SENTINEL] = np.nan
     return total, bounds
 
 
@@ -141,6 +130,28 @@ pad_x_deg = PAD_KM / km_per_deg_lon
 pad_y_deg = PAD_KM / 111.32
 xlim = (raw_left - pad_x_deg, raw_right + pad_x_deg)
 ylim = (raw_bottom - pad_y_deg, raw_top + pad_y_deg)
+
+
+def _nice_ticks(vmin, vmax, n, inset_frac=0.12):
+    """n evenly spaced, round values spanning an INSET of [vmin, vmax]
+    -- same helper as kosi_example.py, so the graticule labels match
+    that figure's style."""
+    span = vmax - vmin
+    lo, hi = vmin + inset_frac * span, vmax - inset_frac * span
+    for step in (0.5, 0.25, 0.1, 0.05):
+        start = np.ceil(lo / step) * step
+        candidates = np.arange(start, hi + 1e-9, step)
+        if len(candidates) >= n:
+            idx = np.round(np.linspace(0, len(candidates) - 1, n)).astype(int)
+            return sorted(set(candidates[idx]))
+    return list(np.linspace(lo, hi, n))
+
+
+# Graticule labels in the kosi_example.py style: latitude on the left edge
+# of the leftmost column only, longitude on the bottom edge of the bottom
+# row only, nothing on interior panels, no gridlines.
+LAT_TICKS = _nice_ticks(ylim[0], ylim[1], 3)
+LON_TICKS = _nice_ticks(xlim[0], xlim[1], 2)
 
 # Panel (frame) aspect is set to exactly match the displayed data aspect
 # (padded extent, corrected for the same 1/cos(latitude) stretch applied
@@ -188,7 +199,7 @@ for i, year in enumerate(YEARS):
     ax = axes[i]
     total, bounds = rasters[year]
     left, bottom, right, top = bounds
-    im = ax.imshow(total, cmap=cmap, vmin=0, vmax=VMAX,
+    im = ax.imshow(total, cmap=cmap, vmin=VMIN, vmax=VMAX,
                     extent=(left, right, bottom, top), interpolation='nearest')
     bihar_gdf.boundary.plot(ax=ax, color='#333333', linewidth=0.6)
     # xlim/ylim use the padded frame computed above (same for every year,
@@ -207,8 +218,18 @@ for i, year in enumerate(YEARS):
     # that the upper-left corner doesn't have.
     ax.text(0.97, 0.96, str(year), transform=ax.transAxes, ha='right', va='top',
             fontsize=10, weight='bold', color='#222222')
-    ax.set_xticks([])
-    ax.set_yticks([])
+    if i % ncols == 0:
+        ax.set_yticks(LAT_TICKS)
+        ax.set_yticklabels([f'{v:.1f}°N' for v in LAT_TICKS], fontsize=8.5, rotation=90, va='center')
+        ax.tick_params(axis='y', length=3)
+    else:
+        ax.set_yticks([])
+    if i // ncols == nrows - 1:
+        ax.set_xticks(LON_TICKS)
+        ax.set_xticklabels([f'{v:.1f}°E' for v in LON_TICKS], fontsize=8.5)
+        ax.tick_params(axis='x', length=3)
+    else:
+        ax.set_xticks([])
     ax.set_aspect(1 / np.cos(np.radians((bottom + top) / 2)))  # approx equirectangular at Bihar's latitude
     for spine in ax.spines.values():
         spine.set_visible(True)

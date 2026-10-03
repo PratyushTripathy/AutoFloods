@@ -682,16 +682,18 @@ def merge_flood_gdfs(flood_dir, date_index=5, delimiter='_'):
 
 
 def decibel_to_linear(decibels):
-    """dB -> linear power. Sentinel-1 RTC backscatter is stored in dB;
-    the Z-score baseline (mean/std) is computed in linear units, since
-    averaging in dB (a log scale) would bias the mean. See linear_to_decibel
-    for the inverse, used only for display (e.g. plotting VV/VH imagery)."""
+    """dB -> linear power (10 ** (dB / 10)). Inverse of linear_to_decibel().
+    Note that OPERA RTC-S1 and Planetary Computer Sentinel-1 RTC deliver
+    gamma0 in linear power, not dB."""
     return 10 ** (decibels / 10)
 
 
 def linear_to_decibel(linear):
-    """Linear power -> dB. Inverse of decibel_to_linear(); use for display
-    only -- the pipeline itself works in linear units end to end."""
+    """Linear power -> dB (10 * log10(linear)). Inverse of decibel_to_linear().
+    The pipeline applies this to the linear-power gamma0 it reads from
+    OPERA RTC-S1 / Planetary Computer RTC, so the Z-score baseline and
+    anomaly are computed in dB. Callers must mask values <= 0 to NaN
+    first; this function does not guard against them."""
     return 10 * np.log10(linear)
 
 

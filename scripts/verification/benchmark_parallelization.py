@@ -46,7 +46,7 @@ import rioxarray  # noqa: F401 -- registers .rio accessor
 import rasterio
 
 from autofloods.sources import OPERASource
-from autofloods.utils import decibel_to_linear
+from autofloods.utils import linear_to_decibel
 
 # GDAL warp memory: research (rasterio/GDAL docs) explicitly warns that
 # raising num_threads without also raising warp memory just makes
@@ -217,7 +217,8 @@ if __name__ == '__main__':
     native_scenes = {}
     for p in passes:
         vv_ds, vh_ds = source.read_vv_vh(p)
-        native_scenes[p.id] = {'vv_ds': decibel_to_linear(vv_ds), 'vh_ds': decibel_to_linear(vh_ds)}
+        native_scenes[p.id] = {'vv_ds': linear_to_decibel(vv_ds.where(vv_ds > 0)),
+                               'vh_ds': linear_to_decibel(vh_ds.where(vh_ds > 0))}
     print(f'Downloaded {len(native_scenes)} scenes in {time.time()-t0:.1f}s', flush=True)
 
     gdf_all = gpd.read_file(GRID)

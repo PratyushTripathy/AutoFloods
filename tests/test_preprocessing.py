@@ -28,7 +28,7 @@ import xarray as xr
 import xrspatial
 from shapely.geometry import box
 
-from autofloods import preprocessing
+from autofloods import preprocessing, utils
 
 
 def _make_grid_file(tmp_path, zone='45R', bounds=(85.0, 25.0, 85.5, 25.5), filename='grid.gpkg'):
@@ -289,12 +289,17 @@ class TestComputeSlope:
 
 
 class TestReadSentinel1Stac:
-    def test_converts_decibel_to_linear_and_preserves_item_id(self):
-        vv_db = xr.DataArray(np.array([[0.0, 10.0], [20.0, 0.0]]))
-        vh_db = xr.DataArray(np.array([[10.0, 0.0], [0.0, 10.0]]))
+    def test_converts_linear_to_decibel_and_preserves_item_id(self):
+        """OPERA RTC-S1 and Planetary Computer RTC deliver gamma0 in LINEAR
+        power; read_sentinel1_stac converts it to dB (utils.linear_to_decibel)
+        so the Z-score baseline and anomaly are computed on the same scale as
+        the reference implementations. Values <= 0 cannot be log-scaled and
+        are masked to NaN first, never -inf or a sentinel."""
+        vv_linear = xr.DataArray(np.array([[0.0, 10.0], [20.0, 0.0]]))
+        vh_linear = xr.DataArray(np.array([[10.0, 0.0], [0.0, 10.0]]))
 
         source = MagicMock()
-        source.read_vv_vh.return_value = (vv_db, vh_db)
+        source.read_vv_vh.return_value = (vv_linear, vh_linear)
 
         stac_item = MagicMock()
         stac_item.id = 'scene123'
@@ -302,9 +307,25 @@ class TestReadSentinel1Stac:
         item_id, out = preprocessing.read_sentinel1_stac(stac_item, source, overview_level=2)
 
         assert item_id == 'scene123'
-        np.testing.assert_allclose(out['vv_ds'].values, 10 ** (vv_db.values / 10))
-        np.testing.assert_allclose(out['vh_ds'].values, 10 ** (vh_db.values / 10))
         source.read_vv_vh.assert_called_once_with(stac_item, overview_level=2, bbox=None)
+
+        # positive inputs: the real conversion function, applied to the
+        # positive entries only (10 -> 10 dB, 20 -> ~13.01 dB)
+        positive = vv_linear.values > 0
+        np.testing.assert_allclose(
+            out['vv_ds'].values[positive],
+            utils.linear_to_decibel(vv_linear.values[positive]))
+        positive_vh = vh_linear.values > 0
+        np.testing.assert_allclose(
+            out['vh_ds'].values[positive_vh],
+            utils.linear_to_decibel(vh_linear.values[positive_vh]))
+
+        # non-positive inputs (the zeros in both fixtures) come back as NaN,
+        # not -inf and not a numeric sentinel
+        assert np.all(np.isnan(out['vv_ds'].values[~positive]))
+        assert np.all(np.isnan(out['vh_ds'].values[~positive_vh]))
+        assert not np.any(np.isinf(out['vv_ds'].values))
+        assert not np.any(np.isinf(out['vh_ds'].values))
 
     def test_passes_bbox_through_to_source(self):
         source = MagicMock()
@@ -385,6 +406,40 @@ class TestComputeDryBaselineStats:
     before relying on the incremental path in production.
     """
 
+    def test_sentinel_threshold_is_17_db_and_masks_values_between_17_and_50(self, tmp_path):
+        """Pins the nodata sentinel on the dB scale. Since e87eff5 scenes are
+        in decibels and anything >= 17 dB is treated as nodata (real RTC
+        gamma0 over Bihar tops out near 30 dB VV at the parts-per-million
+        level, so this masks only stray sentinels / point targets). The
+        pre-dB rule was >= 50 (linear); a value of 25 is masked under the
+        current rule and would have been kept under the old one, so this
+        test fails if the threshold ever reverts."""
+        assert preprocessing._NODATA_SENTINEL_THRESHOLD == 17
+
+        grid_path = _make_grid_file(tmp_path)
+        clipped_dict = {}
+        for i in range(3):
+            vv_fill = np.full((40, 40), 1.0)
+            vh_fill = np.full((40, 40), 2.0)
+            if i == 1:
+                vv_fill[0:3, 0:3] = 25.0  # between the old (50) and new (17) thresholds
+            clipped_dict[f'scene{i}'] = {
+                'vv_ds': _make_source_dataarray(fill=vv_fill),
+                'vh_ds': _make_source_dataarray(fill=vh_fill),
+            }
+
+        stats = preprocessing.compute_dry_baseline_stats(
+            clipped_dict, grid_path, 'tile1', max_workers=1, cell_size=100,
+        )
+
+        # the 25.0 patch is masked, so the mean there is the mean of the
+        # other two scenes (1.0), not (1 + 25 + 1) / 3 = 9.0, and the std
+        # stays 0 rather than picking up the masked value's spread
+        np.testing.assert_allclose(stats['vv']['mean'].values, 1.0, rtol=1e-6)
+        np.testing.assert_allclose(stats['vv']['std'].values, 0.0, atol=1e-6)
+        # VH carried no sentinel: unchanged either way
+        np.testing.assert_allclose(stats['vh']['mean'].values, 2.0, rtol=1e-6)
+
     def test_matches_stack_then_reduce(self, tmp_path):
         grid_path = _make_grid_file(tmp_path)
         rng = np.random.default_rng(0)
@@ -408,8 +463,9 @@ class TestComputeDryBaselineStats:
         stacked = preprocessing.stack_images(
             clipped_dict, grid_path, 'tile1', max_workers=1, cell_size=100,
         )
-        vv_stack = stacked['vv_stack'].where(stacked['vv_stack'] < 50, np.nan)
-        vh_stack = stacked['vh_stack'].where(stacked['vh_stack'] < 50, np.nan)
+        thr = preprocessing._NODATA_SENTINEL_THRESHOLD
+        vv_stack = stacked['vv_stack'].where(stacked['vv_stack'] < thr, np.nan)
+        vh_stack = stacked['vh_stack'].where(stacked['vh_stack'] < thr, np.nan)
         expected_vv_mean = vv_stack.mean(axis=0)
         expected_vv_std = vv_stack.std(axis=0)
         expected_vh_mean = vh_stack.mean(axis=0)
