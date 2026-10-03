@@ -28,7 +28,7 @@ import xarray as xr
 import xrspatial
 from shapely.geometry import box
 
-from autofloods import preprocessing
+from autofloods import preprocessing, utils
 
 
 def _make_grid_file(tmp_path, zone='45R', bounds=(85.0, 25.0, 85.5, 25.5), filename='grid.gpkg'):
@@ -289,12 +289,17 @@ class TestComputeSlope:
 
 
 class TestReadSentinel1Stac:
-    def test_converts_decibel_to_linear_and_preserves_item_id(self):
-        vv_db = xr.DataArray(np.array([[0.0, 10.0], [20.0, 0.0]]))
-        vh_db = xr.DataArray(np.array([[10.0, 0.0], [0.0, 10.0]]))
+    def test_converts_linear_to_decibel_and_preserves_item_id(self):
+        """OPERA RTC-S1 and Planetary Computer RTC deliver gamma0 in LINEAR
+        power; read_sentinel1_stac converts it to dB (utils.linear_to_decibel)
+        so the Z-score baseline and anomaly are computed on the same scale as
+        the reference implementations. Values <= 0 cannot be log-scaled and
+        are masked to NaN first, never -inf or a sentinel."""
+        vv_linear = xr.DataArray(np.array([[0.0, 10.0], [20.0, 0.0]]))
+        vh_linear = xr.DataArray(np.array([[10.0, 0.0], [0.0, 10.0]]))
 
         source = MagicMock()
-        source.read_vv_vh.return_value = (vv_db, vh_db)
+        source.read_vv_vh.return_value = (vv_linear, vh_linear)
 
         stac_item = MagicMock()
         stac_item.id = 'scene123'
@@ -302,9 +307,25 @@ class TestReadSentinel1Stac:
         item_id, out = preprocessing.read_sentinel1_stac(stac_item, source, overview_level=2)
 
         assert item_id == 'scene123'
-        np.testing.assert_allclose(out['vv_ds'].values, 10 ** (vv_db.values / 10))
-        np.testing.assert_allclose(out['vh_ds'].values, 10 ** (vh_db.values / 10))
         source.read_vv_vh.assert_called_once_with(stac_item, overview_level=2, bbox=None)
+
+        # positive inputs: the real conversion function, applied to the
+        # positive entries only (10 -> 10 dB, 20 -> ~13.01 dB)
+        positive = vv_linear.values > 0
+        np.testing.assert_allclose(
+            out['vv_ds'].values[positive],
+            utils.linear_to_decibel(vv_linear.values[positive]))
+        positive_vh = vh_linear.values > 0
+        np.testing.assert_allclose(
+            out['vh_ds'].values[positive_vh],
+            utils.linear_to_decibel(vh_linear.values[positive_vh]))
+
+        # non-positive inputs (the zeros in both fixtures) come back as NaN,
+        # not -inf and not a numeric sentinel
+        assert np.all(np.isnan(out['vv_ds'].values[~positive]))
+        assert np.all(np.isnan(out['vh_ds'].values[~positive_vh]))
+        assert not np.any(np.isinf(out['vv_ds'].values))
+        assert not np.any(np.isinf(out['vh_ds'].values))
 
     def test_passes_bbox_through_to_source(self):
         source = MagicMock()
