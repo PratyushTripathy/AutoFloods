@@ -8,13 +8,23 @@ AutoFloods lets you map flooded areas from Sentinel-1 SAR (radar)
 imagery over any region and time period you choose. Give it an area of
 interest and a date range, and it returns a flood extent for every
 scene it finds, plus a monthly count of how often each pixel was
-flooded.
+flooded. The software's focus is on what it takes to run that
+unattended at scale: memory optimization, parallelization,
+end-to-end pipeline orchestration, and, above all, modularity, so that
+a different data source or a different detection algorithm can be
+plugged in without touching the rest of the pipeline.
 
-Under the hood, it detects flooded pixels with per-pixel Z-score
-anomaly detection: a dry-season VV/VH backscatter baseline (mean +
-standard deviation) is fit per tile, and wet-season scenes are flagged
-flooded wherever backscatter drops significantly below that baseline,
-with a terrain-slope mask to suppress false positives on steep ground.
+Under the hood, floods are detected by per-pixel Z-score anomaly
+detection: a dry-season VV/VH backscatter baseline (mean and standard
+deviation, in decibels) is fit for every pixel, and a wet-season scene
+is flagged flooded wherever its backscatter drops well below that
+baseline, with a terrain-slope mask to suppress false positives on
+steep ground. The algorithm is the one behind Global Flood Mapper; you
+can read its details and validation in
+[Tripathy and Malladi (2022)](https://doi.org/10.1007/s11069-022-05428-2).
+However, AutoFloods also lets you integrate your own flood detection
+algorithm in place of it, through the same `FloodDetector` interface
+the built-in detector uses.
 
 The workflow is tiled by design: each AOI is processed as its own
 independent unit rather than one large country- or state-scale mosaic,
