@@ -142,6 +142,28 @@ pad_y_deg = PAD_KM / 111.32
 xlim = (raw_left - pad_x_deg, raw_right + pad_x_deg)
 ylim = (raw_bottom - pad_y_deg, raw_top + pad_y_deg)
 
+
+def _nice_ticks(vmin, vmax, n, inset_frac=0.12):
+    """n evenly spaced, round values spanning an INSET of [vmin, vmax]
+    -- same helper as kosi_example.py, so the graticule labels match
+    that figure's style."""
+    span = vmax - vmin
+    lo, hi = vmin + inset_frac * span, vmax - inset_frac * span
+    for step in (0.5, 0.25, 0.1, 0.05):
+        start = np.ceil(lo / step) * step
+        candidates = np.arange(start, hi + 1e-9, step)
+        if len(candidates) >= n:
+            idx = np.round(np.linspace(0, len(candidates) - 1, n)).astype(int)
+            return sorted(set(candidates[idx]))
+    return list(np.linspace(lo, hi, n))
+
+
+# Graticule labels in the kosi_example.py style: latitude on the left edge
+# of the leftmost column only, longitude on the bottom edge of the bottom
+# row only, nothing on interior panels, no gridlines.
+LAT_TICKS = _nice_ticks(ylim[0], ylim[1], 3)
+LON_TICKS = _nice_ticks(xlim[0], xlim[1], 2)
+
 # Panel (frame) aspect is set to exactly match the displayed data aspect
 # (padded extent, corrected for the same 1/cos(latitude) stretch applied
 # to each axes below) so matplotlib doesn't have to letterbox the image
@@ -207,8 +229,18 @@ for i, year in enumerate(YEARS):
     # that the upper-left corner doesn't have.
     ax.text(0.97, 0.96, str(year), transform=ax.transAxes, ha='right', va='top',
             fontsize=10, weight='bold', color='#222222')
-    ax.set_xticks([])
-    ax.set_yticks([])
+    if i % ncols == 0:
+        ax.set_yticks(LAT_TICKS)
+        ax.set_yticklabels([f'{v:.1f}°N' for v in LAT_TICKS], fontsize=8.5, rotation=90, va='center')
+        ax.tick_params(axis='y', length=3)
+    else:
+        ax.set_yticks([])
+    if i // ncols == nrows - 1:
+        ax.set_xticks(LON_TICKS)
+        ax.set_xticklabels([f'{v:.1f}°E' for v in LON_TICKS], fontsize=8.5)
+        ax.tick_params(axis='x', length=3)
+    else:
+        ax.set_xticks([])
     ax.set_aspect(1 / np.cos(np.radians((bottom + top) / 2)))  # approx equirectangular at Bihar's latitude
     for spine in ax.spines.values():
         spine.set_visible(True)
