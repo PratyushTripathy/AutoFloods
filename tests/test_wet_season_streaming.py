@@ -21,6 +21,7 @@ monkeypatched with small deterministic synthetic arrays, but detection
 merge/gap-count math run for real.
 """
 import os
+import sys
 import types
 
 import numpy as np
@@ -45,7 +46,7 @@ X = np.arange(SIZE) * 30.0
 # 4 wet scenes: two share a date (same-day multi-track, to exercise
 # merge-by-date's per-pixel max-combine across *different* scenes, not
 # just the same one twice), one has a sentinel-nodata gap (>= 17 dB, the
-# preprocessing._NODATA_SENTINEL_THRESHOLD rule, masked to NaN by the
+# preprocessing.NODATA_SENTINEL_THRESHOLD rule, masked to NaN by the
 # per-scene nodata handling) to exercise the gap-count
 # accumulator.
 SCENE_DEFS = {
@@ -104,7 +105,7 @@ def _old_style_wet_scene(scene_id):
     vv = _make_scene_dataarray(defn['vv'])
     vh = _make_scene_dataarray(defn['vh'])
     scene = xr.concat([vv, vh], dim='band').assign_coords(band=['vv_ds', 'vh_ds'])
-    return scene.where(scene < autofloods.preprocessing._NODATA_SENTINEL_THRESHOLD, np.nan)
+    return scene.where(scene < autofloods.preprocessing.NODATA_SENTINEL_THRESHOLD, np.nan)
 
 
 def _write_dummy_slope(fm):
@@ -182,6 +183,33 @@ def _wire_wet_scene_mocks(fm, monkeypatch, clip_call_log=None):
         return _make_scene_dataarray(SCENE_DEFS[scene_id][band])
 
     monkeypatch.setattr(autofloods.preprocessing, 'clip_xarray_using_id', _fake_clip)
+
+
+class TestWetStreamingSentinelPin:
+    def test_prepare_wet_scenes_masks_values_at_or_above_the_shared_threshold(self, tmp_path, monkeypatch):
+        """prepare_wet_scenes()'s streaming path applies the nodata sentinel
+        when it writes each per-scene cache, and must use the same
+        constant as preprocessing (NODATA_SENTINEL_THRESHOLD, 17 dB) rather
+        than a literal of its own. A 25.0 value is masked under the current
+        rule and would survive the pre-dB >= 50 rule."""
+        scene_id = next(iter(SCENE_DEFS))
+        patched = {k: {b: [row[:] for row in v[b]] for b in v} for k, v in SCENE_DEFS.items()}
+        patched[scene_id]['vv'][2][2] = 25.0  # above 17, below the old 50
+        monkeypatch.setattr(sys.modules[__name__], 'SCENE_DEFS', patched)
+
+        fm = _make_flood_mapper(tmp_path)
+        fm.mean_std_by_aoi = {TILE_ID: _make_baseline()}
+        _wire_wet_scene_mocks(fm, monkeypatch)
+        _write_dummy_slope(fm)
+
+        fm.prepare_wet_scenes()
+
+        cached = xr.load_dataarray(os.path.join(fm.wet_scenes_cache_dir, f'wetscene_{TILE_ID}_{scene_id}.nc'))
+        vv = cached.sel(band='vv_ds').values
+        assert 25.0 >= autofloods.preprocessing.NODATA_SENTINEL_THRESHOLD
+        assert np.isnan(vv[2, 2]), 'the 25.0 pixel should have been masked to NaN'
+        assert np.nanmax(vv) < autofloods.preprocessing.NODATA_SENTINEL_THRESHOLD
+        assert np.isfinite(vv).sum() >= vv.size - 2  # everything else survives
 
 
 class TestStreamingMatchesOldInMemoryComputation:

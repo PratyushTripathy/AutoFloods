@@ -194,7 +194,9 @@ def stack_images(clipped_dict, grid_shapefile_path, id, max_workers=None, cell_s
 # masked to NaN before folding into the running baseline stats -- same
 # threshold generate_mean_std_by_aoi() used to apply post-hoc, over the
 # full in-memory stack, before this function existed.
-_NODATA_SENTINEL_THRESHOLD = 17  # dB
+NODATA_SENTINEL_THRESHOLD = 17  # dB; backscatter at or above this is treated as nodata.
+# Single source of truth for that rule: flood_mapper's streaming paths
+# (autofloods/__init__.py) read it from here rather than repeating the number.
 
 
 def _welford_init(x):
@@ -327,8 +329,8 @@ def compute_dry_baseline_stats(clipped_dict, grid_shapefile_path, id, max_worker
             )
             for future in done:
                 aligned = future.result()
-                vv = aligned['vv_ds'].where(aligned['vv_ds'] < _NODATA_SENTINEL_THRESHOLD, np.nan)
-                vh = aligned['vh_ds'].where(aligned['vh_ds'] < _NODATA_SENTINEL_THRESHOLD, np.nan)
+                vv = aligned['vv_ds'].where(aligned['vv_ds'] < NODATA_SENTINEL_THRESHOLD, np.nan)
+                vh = aligned['vh_ds'].where(aligned['vh_ds'] < NODATA_SENTINEL_THRESHOLD, np.nan)
 
                 # Every scene read via utils.open_rasterio_with_retry()
                 # (both OPERASource and MPCSource) carries a real, incidental
@@ -443,8 +445,8 @@ def compute_dry_baseline_stats_from_paths(path_dict, max_workers=None):
             )
             for future in done:
                 aligned = future.result()
-                vv = aligned['vv_ds'].where(aligned['vv_ds'] < _NODATA_SENTINEL_THRESHOLD, np.nan)
-                vh = aligned['vh_ds'].where(aligned['vh_ds'] < _NODATA_SENTINEL_THRESHOLD, np.nan)
+                vv = aligned['vv_ds'].where(aligned['vv_ds'] < NODATA_SENTINEL_THRESHOLD, np.nan)
+                vh = aligned['vh_ds'].where(aligned['vh_ds'] < NODATA_SENTINEL_THRESHOLD, np.nan)
 
                 if 'band' in vv.dims:
                     vv = vv.squeeze('band', drop=True)

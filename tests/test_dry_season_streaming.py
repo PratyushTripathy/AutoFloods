@@ -159,6 +159,38 @@ class TestDryStreamingMatchesOldBulkPath:
         np.testing.assert_array_equal(new_baseline.sel(band='vh_std').values, old_stats['vh']['std'].values)
 
 
+class TestDryStreamingSentinelPin:
+    def test_read_scenes_masks_values_at_or_above_the_shared_threshold(self, tmp_path, monkeypatch):
+        """read_scenes()'s dry streaming path applies the nodata sentinel
+        when it writes each per-scene cache. It must use the same constant
+        as preprocessing (NODATA_SENTINEL_THRESHOLD, 17 dB), not its own
+        literal: a 25.0 patch is masked under the current rule and would
+        survive the pre-dB >= 50 rule, so a divergence between this path
+        and the constant fails here."""
+        grid_path = _make_grid_file(tmp_path)
+        vv_fill = np.full((40, 40), 1.0)
+        vv_fill[0:3, 0:3] = 25.0  # above 17, below the old 50
+        scene_defs = {
+            'scene0': {'vv_ds': _make_source_dataarray(fill=vv_fill),
+                       'vh_ds': _make_source_dataarray(fill=np.full((40, 40), 2.0))},
+        }
+        fm = _make_flood_mapper(tmp_path, grid_path)
+        fm.cell_size = 100
+        _wire_dry_scene_mocks(fm, monkeypatch, scene_defs, {TILE_ID: ['scene0']})
+
+        fm.get_dry_dates()
+        fm.generate_dry_date_ranges()
+        fm.get_s1_items(dry_wet='dry')
+        fm.read_scenes(dry_wet='dry', max_workers=1, reproject_max_workers=1)
+
+        cached = xr.load_dataarray(os.path.join(fm.dry_scenes_cache_dir, f'dryscene_{TILE_ID}_scene0.nc'))
+        vv = cached.sel(band='vv_ds').values
+        assert 25.0 >= preprocessing.NODATA_SENTINEL_THRESHOLD  # the case this test exists for
+        assert np.isnan(vv).any(), 'the 25.0 patch should have been masked to NaN'
+        assert np.nanmax(vv) < preprocessing.NODATA_SENTINEL_THRESHOLD
+        assert np.isfinite(vv).sum() > 0.5 * vv.size  # the 1.0 background survives
+
+
 class TestDryReadSceneFanOut:
     def test_scene_shared_by_two_aois_read_once(self, tmp_path, monkeypatch):
         grid_path = _make_grid_file(

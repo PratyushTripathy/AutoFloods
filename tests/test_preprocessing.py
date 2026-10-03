@@ -414,7 +414,7 @@ class TestComputeDryBaselineStats:
         pre-dB rule was >= 50 (linear); a value of 25 is masked under the
         current rule and would have been kept under the old one, so this
         test fails if the threshold ever reverts."""
-        assert preprocessing._NODATA_SENTINEL_THRESHOLD == 17
+        assert preprocessing.NODATA_SENTINEL_THRESHOLD == 17
 
         grid_path = _make_grid_file(tmp_path)
         clipped_dict = {}
@@ -463,7 +463,7 @@ class TestComputeDryBaselineStats:
         stacked = preprocessing.stack_images(
             clipped_dict, grid_path, 'tile1', max_workers=1, cell_size=100,
         )
-        thr = preprocessing._NODATA_SENTINEL_THRESHOLD
+        thr = preprocessing.NODATA_SENTINEL_THRESHOLD
         vv_stack = stacked['vv_stack'].where(stacked['vv_stack'] < thr, np.nan)
         vh_stack = stacked['vh_stack'].where(stacked['vh_stack'] < thr, np.nan)
         expected_vv_mean = vv_stack.mean(axis=0)
