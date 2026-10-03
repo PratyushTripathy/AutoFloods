@@ -1069,10 +1069,11 @@ class flood_mapper():
         stack_images()-then-.mean()/.std() path, which held the full
         dry-season stack for a tile in memory at once; see that
         function's docstring for the previous behavior, still used
-        elsewhere). Stray large sentinel values (>= 50, e.g. from an
-        upstream nodata convention) are masked to NaN per scene before
-        folding into the running stats, same effective behavior as
-        before.
+        elsewhere). Stray large sentinel values (>= 17 dB, i.e.
+        preprocessing._NODATA_SENTINEL_THRESHOLD applied to the
+        decibel-scaled scenes; e.g. from an upstream nodata convention)
+        are masked to NaN per scene before folding into the running
+        stats, same effective behavior as before.
 
         If self.detector.requires_baseline_fitting is False, fit_baseline()
         is never called and no baseline .nc is written; mean_std_by_aoi[id]

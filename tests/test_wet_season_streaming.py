@@ -44,8 +44,9 @@ X = np.arange(SIZE) * 30.0
 
 # 4 wet scenes: two share a date (same-day multi-track, to exercise
 # merge-by-date's per-pixel max-combine across *different* scenes, not
-# just the same one twice), one has a sentinel-nodata gap (>=50, masked
-# to NaN by the per-scene nodata handling) to exercise the gap-count
+# just the same one twice), one has a sentinel-nodata gap (>= 17 dB, the
+# preprocessing._NODATA_SENTINEL_THRESHOLD rule, masked to NaN by the
+# per-scene nodata handling) to exercise the gap-count
 # accumulator.
 SCENE_DEFS = {
     # (date 20240715) floods VV-only at (0,0)
@@ -103,7 +104,7 @@ def _old_style_wet_scene(scene_id):
     vv = _make_scene_dataarray(defn['vv'])
     vh = _make_scene_dataarray(defn['vh'])
     scene = xr.concat([vv, vh], dim='band').assign_coords(band=['vv_ds', 'vh_ds'])
-    return scene.where(scene < 50, np.nan)
+    return scene.where(scene < autofloods.preprocessing._NODATA_SENTINEL_THRESHOLD, np.nan)
 
 
 def _write_dummy_slope(fm):

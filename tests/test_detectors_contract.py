@@ -15,19 +15,19 @@ detector can be checked against by adding one line here, not by writing
 a new file.
 
 No network access, no real Sentinel-1 data -- every fixture below is
-synthetic, and built directly in linear power (matching real OPERA
-RTC-S1 gamma0; see otsu.py). Values are NOT built by generating a dB
-Gaussian and exponentiating it back -- that round-trip was tried first
-and rejected: exponentiating a Gaussian produces a log-normal, heavy-
-right-tailed distribution, which inflates the dry-season stack's linear
-std enough to corrupt ZScoreDetector's anomaly calculation (verified:
-it dropped the water/land separation from >95% to ~49%, indistinguishable
-from noise). Real dry-season linear power is itself tight (confirmed
-directly against a real production baseline: std ~0.7% of the mean),
-so the fixture below is built that way from the start.
-OtsuDetector.detect() does its own linear-to-dB conversion internally;
-ZScoreDetector's anomaly calculation only needs a low-variance linear
-baseline, which this fixture provides directly.
+synthetic. Both detectors receive decibel-scaled backscatter in
+production (preprocessing.read_sentinel1_stac converts the linear-power
+gamma0 it reads to dB once, up front; since e87eff5 neither detector
+converts anything itself), so the plain Gaussian values below stand in
+for dB directly and are handed to the detectors unchanged. Values are
+NOT built by generating a Gaussian and exponentiating it -- that
+round-trip was tried first and rejected: exponentiating a Gaussian
+produces a log-normal, heavy-right-tailed distribution, which inflates
+the dry-season stack's std enough to corrupt ZScoreDetector's anomaly
+calculation (verified: it dropped the water/land separation from >95%
+to ~49%, indistinguishable from noise). ZScoreDetector only needs a
+low-variance baseline, and OtsuDetector only needs two separated
+populations, which this fixture provides directly.
 """
 import numpy as np
 import xarray as xr
@@ -59,12 +59,12 @@ def _synthetic_dry_stats(**kwargs):
 
 
 def _synthetic_wet_scene(size=200, seed=1):
-    # Two clearly separated populations per band, in linear power: land
-    # matches the dry baseline's own mean (~1.0, so ZScoreDetector's
-    # anomaly is ~0, not flagged), water sits an order of magnitude
-    # lower (~0.1, ~10 dB down -- well past both ZScoreDetector's -2.5 SD
-    # threshold and OtsuDetector's bimodality check once it converts to
-    # dB internally). Not tuned to either detector specifically.
+    # Two clearly separated populations per band (plain values, consumed
+    # as dB): land matches the dry baseline's own mean (~1.0, so
+    # ZScoreDetector's anomaly is ~0, not flagged), water sits well below
+    # it (~0.1 -- far past ZScoreDetector's -2.5 SD threshold, and two
+    # distinct modes for OtsuDetector's bimodality check). Not tuned to
+    # either detector specifically.
     rng = np.random.default_rng(seed)
     half = size // 2
     land = rng.normal(1.0, 0.02, size=(size, half))

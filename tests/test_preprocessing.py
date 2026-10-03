@@ -406,6 +406,40 @@ class TestComputeDryBaselineStats:
     before relying on the incremental path in production.
     """
 
+    def test_sentinel_threshold_is_17_db_and_masks_values_between_17_and_50(self, tmp_path):
+        """Pins the nodata sentinel on the dB scale. Since e87eff5 scenes are
+        in decibels and anything >= 17 dB is treated as nodata (real RTC
+        gamma0 over Bihar tops out near 30 dB VV at the parts-per-million
+        level, so this masks only stray sentinels / point targets). The
+        pre-dB rule was >= 50 (linear); a value of 25 is masked under the
+        current rule and would have been kept under the old one, so this
+        test fails if the threshold ever reverts."""
+        assert preprocessing._NODATA_SENTINEL_THRESHOLD == 17
+
+        grid_path = _make_grid_file(tmp_path)
+        clipped_dict = {}
+        for i in range(3):
+            vv_fill = np.full((40, 40), 1.0)
+            vh_fill = np.full((40, 40), 2.0)
+            if i == 1:
+                vv_fill[0:3, 0:3] = 25.0  # between the old (50) and new (17) thresholds
+            clipped_dict[f'scene{i}'] = {
+                'vv_ds': _make_source_dataarray(fill=vv_fill),
+                'vh_ds': _make_source_dataarray(fill=vh_fill),
+            }
+
+        stats = preprocessing.compute_dry_baseline_stats(
+            clipped_dict, grid_path, 'tile1', max_workers=1, cell_size=100,
+        )
+
+        # the 25.0 patch is masked, so the mean there is the mean of the
+        # other two scenes (1.0), not (1 + 25 + 1) / 3 = 9.0, and the std
+        # stays 0 rather than picking up the masked value's spread
+        np.testing.assert_allclose(stats['vv']['mean'].values, 1.0, rtol=1e-6)
+        np.testing.assert_allclose(stats['vv']['std'].values, 0.0, atol=1e-6)
+        # VH carried no sentinel: unchanged either way
+        np.testing.assert_allclose(stats['vh']['mean'].values, 2.0, rtol=1e-6)
+
     def test_matches_stack_then_reduce(self, tmp_path):
         grid_path = _make_grid_file(tmp_path)
         rng = np.random.default_rng(0)
@@ -429,8 +463,9 @@ class TestComputeDryBaselineStats:
         stacked = preprocessing.stack_images(
             clipped_dict, grid_path, 'tile1', max_workers=1, cell_size=100,
         )
-        vv_stack = stacked['vv_stack'].where(stacked['vv_stack'] < 50, np.nan)
-        vh_stack = stacked['vh_stack'].where(stacked['vh_stack'] < 50, np.nan)
+        thr = preprocessing._NODATA_SENTINEL_THRESHOLD
+        vv_stack = stacked['vv_stack'].where(stacked['vv_stack'] < thr, np.nan)
+        vh_stack = stacked['vh_stack'].where(stacked['vh_stack'] < thr, np.nan)
         expected_vv_mean = vv_stack.mean(axis=0)
         expected_vv_std = vv_stack.std(axis=0)
         expected_vh_mean = vh_stack.mean(axis=0)
