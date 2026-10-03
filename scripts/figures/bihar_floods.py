@@ -246,9 +246,11 @@ for j in range(len(YEARS), len(axes)):
 # instead of `ax=`, so it never resizes the panel axes.
 cax = fig.add_axes([GRID_WIDTH_FRAC + CBAR_GAP_FRAC, 0.06, CBAR_WIDTH_FRAC * 0.5, 0.88])
 cbar = fig.colorbar(im, cax=cax, orientation='vertical', extend='neither')
-cbar.set_ticks(list(range(VMAX + 1)))
-cbar.set_ticklabels([str(v) for v in range(VMAX)] + [f'≥{VMAX}'])
-cbar.set_label('Flooded observations, July-October (count)', fontsize=9)
+# The bar's base is the colour floor VMIN, not zero, and says so; cells below
+# VMIN render white (see the caption).
+cbar.set_ticks([VMIN] + list(range(1, VMAX + 1)))
+cbar.set_ticklabels([f'{VMIN:g}'] + [str(v) for v in range(1, VMAX)] + [f'≥{VMAX}'])
+cbar.set_label('Flooded observations, July–October (count)', fontsize=9)
 cbar.ax.tick_params(labelsize=8)
 
 # Single common scale bar, drawn inside the last (2025) panel's lower-right
