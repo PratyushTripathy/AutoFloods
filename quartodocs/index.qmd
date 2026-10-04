@@ -39,9 +39,11 @@ AutoFloods reads Sentinel-1 RTC (radiometrically terrain corrected)
 imagery through a pluggable `STACSource` interface, with two
 implementations:
 
-- **`MPCSource`** -- Microsoft Planetary Computer, the original backend.
 - **`OPERASource`** -- NASA's OPERA RTC-S1 product via ASF/CMR, hosted on
-  AWS. Native 30m resolution.
+  AWS. Native 30m resolution. This is the recommended backend and the one
+  the published Bihar record was produced with.
+- **`MPCSource`** -- Microsoft Planetary Computer, the original backend,
+  and what `flood_mapper` falls back to when no `source=` is given.
 
 Swap between them (or add a new source) via the `source=` argument to
 `flood_mapper` -- see [Getting Started](getting-started.qmd).
